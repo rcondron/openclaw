@@ -1,7 +1,5 @@
 packages:
   - .
-  - ui
-  - packages/*
   - extensions/*
 
 onlyBuiltDependencies:

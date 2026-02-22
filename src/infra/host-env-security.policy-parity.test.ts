@@ -23,6 +23,10 @@ describe("host env security policy parity", () => {
     const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
     const swiftPath = path.join(repoRoot, "apps/macos/Sources/OpenClaw/HostEnvSanitizer.swift");
 
+    if (!fs.existsSync(swiftPath)) {
+      return; // Skip when macOS app sources are not present (e.g. TabHR Docker fork)
+    }
+
     const policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as HostEnvSecurityPolicy;
     const swiftSource = fs.readFileSync(swiftPath, "utf8");
 

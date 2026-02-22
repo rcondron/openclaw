@@ -234,14 +234,8 @@ export async function ensureControlUiAssetsBuilt(
 
   const repoRoot = resolveControlUiRepoRoot(process.argv[1]);
   if (!repoRoot) {
-    const hint = indexFromDist
-      ? `Missing Control UI assets at ${indexFromDist}`
-      : "Missing Control UI assets";
-    return {
-      ok: false,
-      built: false,
-      message: `${hint}. Build them with \`pnpm ui:build\` (auto-installs UI deps).`,
-    };
+    // No UI sources (e.g. TabHR Docker fork); gateway runs without Control UI.
+    return { ok: true, built: false };
   }
 
   const indexPath = resolveControlUiDistIndexPathForRoot(repoRoot);

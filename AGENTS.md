@@ -1,5 +1,6 @@
 # Repository Guidelines
 
+- **TabHR fork:** This repo is slimmed for running the gateway as a digital employee in Docker (Linux). macOS/iOS/Android apps, full docs, and many upstream scripts are removed. See `README.md` and `docs/README.md`.
 - Repo: https://github.com/openclaw/openclaw
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 

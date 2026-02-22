@@ -45,7 +45,9 @@ export async function installChromeExtension(opts?: {
 }): Promise<{ path: string }> {
   const src = opts?.sourceDir ?? resolveBundledExtensionRootDir();
   if (!hasManifest(src)) {
-    throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
+    throw new Error(
+      "Bundled Chrome extension is missing (not included in this build). Use a full OpenClaw install or skip browser extension.",
+    );
   }
 
   const stateDir = opts?.stateDir ?? resolveStateDir();

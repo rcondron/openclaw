@@ -36,10 +36,8 @@ export default defineConfig({
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
-      "test/**/*.test.ts",
-      "ui/src/ui/views/usage-render-details.test.ts",
     ],
-    setupFiles: ["test/setup.ts"],
+    setupFiles: [],
     exclude: [
       "dist/**",
       "apps/macos/**",
