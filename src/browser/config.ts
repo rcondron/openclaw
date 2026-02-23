@@ -4,6 +4,7 @@ import {
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
   DEFAULT_BROWSER_CONTROL_PORT,
+  TABHR_CDP_PORT,
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -139,31 +140,26 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure a built-in "chrome" profile exists for the Chrome extension relay.
- *
- * Note: this is an OpenClaw browser profile (routing config), not a Chrome user profile.
- * It points at the local relay CDP endpoint (controlPort + 1).
+ * Ensure a built-in "chrome" profile exists for the TabHR browser extension.
+ * TabHR exposes CDP directly on port 9220 (no relay).
  */
 function ensureDefaultChromeExtensionProfile(
   profiles: Record<string, BrowserProfileConfig>,
-  controlPort: number,
+  _controlPort: number,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
   if (result.chrome) {
     return result;
   }
-  const relayPort = controlPort + 1;
-  if (!Number.isFinite(relayPort) || relayPort <= 0 || relayPort > 65535) {
+  if (!Number.isFinite(TABHR_CDP_PORT) || TABHR_CDP_PORT <= 0 || TABHR_CDP_PORT > 65535) {
     return result;
   }
-  // Avoid adding the built-in profile if the derived relay port is already used by another profile
-  // (legacy single-profile configs may use controlPort+1 for openclaw/openclaw CDP).
-  if (getUsedPorts(result).has(relayPort)) {
+  if (getUsedPorts(result).has(TABHR_CDP_PORT)) {
     return result;
   }
   result.chrome = {
     driver: "extension",
-    cdpUrl: `http://127.0.0.1:${relayPort}`,
+    cdpUrl: `http://127.0.0.1:${TABHR_CDP_PORT}`,
     color: "#00AA00",
   };
   return result;

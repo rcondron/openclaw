@@ -6,12 +6,16 @@ import {
   DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
-import { withBrowserNavigationPolicy } from "../navigation-guard.js";
+import {
+  assertBrowserNavigationAllowed,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
+import { createTabhrClient } from "../tabhr-client.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   getPwAiModule,
@@ -59,13 +63,30 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
-    await withPlaywrightRouteContext({
+    await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
-      feature: "navigate",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ profileCtx, tab, cdpUrl }) => {
+        if (profileCtx.profile.driver === "extension") {
+          await assertBrowserNavigationAllowed({
+            url,
+            ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+          });
+          const tabhr = createTabhrClient(cdpUrl);
+          const data = await tabhr.navigate(url, 8000);
+          return res.json({
+            ok: true,
+            targetId: tab.targetId,
+            url: data.url ?? url,
+            title: data.title ?? "",
+          });
+        }
+        const pw = await requirePwAi(res, "navigate");
+        if (!pw) {
+          return;
+        }
         const result = await pw.navigateViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
@@ -122,12 +143,18 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
         let buffer: Buffer;
-        const shouldUsePlaywright =
-          profileCtx.profile.driver === "extension" ||
-          !tab.wsUrl ||
-          Boolean(ref) ||
-          Boolean(element);
-        if (shouldUsePlaywright) {
+        if (profileCtx.profile.driver === "extension") {
+          if (fullPage || ref || element) {
+            return jsonError(res, 400, "TabHR screenshot does not support fullPage, ref, or element");
+          }
+          const tabhr = createTabhrClient(cdpUrl);
+          const { data: dataUrl } = await tabhr.screenshot(8000);
+          const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl ?? "");
+          if (!match) {
+            return jsonError(res, 502, "TabHR screenshot returned invalid data URL");
+          }
+          buffer = Buffer.from(match[2] ?? "", "base64");
+        } else if (!tab.wsUrl || Boolean(ref) || Boolean(element)) {
           const pw = await requirePwAi(res, "screenshot");
           if (!pw) {
             return;
@@ -214,6 +241,27 @@ export function registerBrowserAgentSnapshotRoutes(
       if ((labels || mode === "efficient") && format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
+      if (profileCtx.profile.driver === "extension") {
+        const tabhr = createTabhrClient(profileCtx.profile.cdpUrl);
+        const statusData = await tabhr.status(5000);
+        const evalResult = await tabhr
+          .evaluate("document.body?.innerText ?? document.documentElement?.innerText ?? ''", {}, 5000)
+          .catch(() => ({ result: "" }));
+        const text = typeof evalResult.result === "string" ? evalResult.result : "";
+        const truncated =
+          typeof limit === "number" && limit > 0 && text.length > limit
+            ? text.slice(0, limit) + "\n..."
+            : text;
+        return res.json({
+          ok: true,
+          format: "aria",
+          targetId: tab.targetId,
+          url: statusData.url ?? tab.url,
+          title: statusData.title ?? "",
+          text: truncated,
+          tree: [],
+        });
+      }
       if (format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");
         if (!pw) {
@@ -297,23 +345,20 @@ export function registerBrowserAgentSnapshotRoutes(
         });
       }
 
-      const snap =
-        profileCtx.profile.driver === "extension" || !tab.wsUrl
-          ? (() => {
-              // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-              // Also covers cases where wsUrl is missing/unusable.
-              return requirePwAi(res, "aria snapshot").then(async (pw) => {
-                if (!pw) {
-                  return null;
-                }
-                return await pw.snapshotAriaViaPlaywright({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
-                  limit,
-                });
+      const snap = !tab.wsUrl
+        ? (() => {
+            return requirePwAi(res, "aria snapshot").then(async (pw) => {
+              if (!pw) {
+                return null;
+              }
+              return await pw.snapshotAriaViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                limit,
               });
-            })()
-          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit });
+            });
+          })()
+        : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit });
 
       const resolved = await Promise.resolve(snap);
       if (!resolved) {

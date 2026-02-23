@@ -429,7 +429,7 @@ export function registerBrowserManageCommands(
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
-    .option("--driver <driver>", "Profile driver (openclaw|extension). Default: openclaw")
+    .option("--driver <driver>", "Profile driver (openclaw|extension). Default: openclaw. Use extension for TabHR (CDP on port 9220).")
     .action(
       async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
         const parent = parentOpts(cmd);

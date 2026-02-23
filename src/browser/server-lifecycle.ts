@@ -1,24 +1,22 @@
 import type { ResolvedBrowserConfig } from "./config.js";
 import { resolveProfile } from "./config.js";
-import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
   listKnownProfileNames,
 } from "./server-context.js";
 
-export async function ensureExtensionRelayForProfiles(params: {
+/** TabHR uses direct CDP on port 9220; no extension relay is started. */
+export async function ensureExtensionRelayForProfiles(_params: {
   resolved: ResolvedBrowserConfig;
   onWarn: (message: string) => void;
 }) {
-  for (const name of Object.keys(params.resolved.profiles)) {
-    const profile = resolveProfile(params.resolved, name);
+  for (const name of Object.keys(_params.resolved.profiles)) {
+    const profile = resolveProfile(_params.resolved, name);
     if (!profile || profile.driver !== "extension") {
       continue;
     }
-    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
-      params.onWarn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
-    });
+    // TabHR browser extension exposes CDP directly at profile.cdpUrl (e.g. :9220); no relay.
   }
 }
 

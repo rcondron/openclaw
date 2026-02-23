@@ -1,5 +1,6 @@
 import type { BrowserFormField } from "../client-actions-core.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { createTabhrClient } from "../tabhr-client.js";
 import {
   type ActKind,
   isActKind,
@@ -8,8 +9,10 @@ import {
 } from "./agent.act.shared.js";
 import {
   readBody,
+  requirePwAi,
   resolveTargetIdFromBody,
   withPlaywrightRouteContext,
+  withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
 import {
@@ -62,13 +65,50 @@ export function registerBrowserAgentActRoutes(
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
 
-    await withPlaywrightRouteContext({
+    await withRouteTabContext({
       req,
       res,
       ctx,
       targetId,
-      feature: `act:${kind}`,
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ profileCtx, tab, cdpUrl }) => {
+        if (profileCtx.profile.driver === "extension") {
+          const tabhr = createTabhrClient(cdpUrl);
+          switch (kind) {
+            case "click": {
+              const x = toNumber(body.x) ?? 0;
+              const y = toNumber(body.y) ?? 0;
+              await tabhr.click(x, y, 8000);
+              return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            }
+            case "type": {
+              const text = typeof body.text === "string" ? body.text : "";
+              await tabhr.type(text, 8000);
+              return res.json({ ok: true, targetId: tab.targetId });
+            }
+            case "press": {
+              const key = toStringOrEmpty(body.key) || "Enter";
+              await tabhr.keypress(key, 8000);
+              return res.json({ ok: true, targetId: tab.targetId });
+            }
+            case "scrollIntoView": {
+              const deltaX = toNumber(body.deltaX) ?? 0;
+              const deltaY = toNumber(body.deltaY) ?? toNumber(body.y) ?? 300;
+              await tabhr.scroll(deltaX, deltaY, 8000);
+              return res.json({ ok: true, targetId: tab.targetId });
+            }
+            default:
+              return jsonError(
+                res,
+                501,
+                `TabHR extension does not support act kind "${kind}". Supported: click (x,y), type, press, scrollIntoView.`,
+              );
+          }
+        }
+
+        const pw = await requirePwAi(res, `act:${kind}`);
+        if (!pw) {
+          return;
+        }
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
 
         switch (kind) {

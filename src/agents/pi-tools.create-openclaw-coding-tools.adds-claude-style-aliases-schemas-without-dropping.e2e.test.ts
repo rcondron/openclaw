@@ -156,9 +156,9 @@ describe("createOpenClawCodingTools", () => {
     expect(schema.type).toBe("object");
     expect(schema.anyOf).toBeUndefined();
   });
-  it("mentions Chrome extension relay in browser tool description", () => {
+  it("mentions TabHR browser extension in browser tool description", () => {
     const browser = createBrowserTool();
-    expect(browser.description).toMatch(/Chrome extension/i);
+    expect(browser.description).toMatch(/TabHR/i);
     expect(browser.description).toMatch(/profile="chrome"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {

@@ -12,10 +12,6 @@ import {
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import {
-  ensureChromeExtensionRelayServer,
-  stopChromeExtensionRelayServer,
-} from "./extension-relay.js";
-import {
   assertBrowserNavigationAllowed,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
@@ -35,6 +31,7 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+import { createTabhrClient, isTabhrReachable, TABHR_TARGET_ID } from "./tabhr-client.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -100,6 +97,19 @@ function createProfileContext(
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
+    if (profile.driver === "extension") {
+      const tabhr = createTabhrClient(profile.cdpUrl);
+      const data = await tabhr.status(5000);
+      return [
+        {
+          targetId: TABHR_TARGET_ID,
+          title: data.title ?? "",
+          url: data.url ?? "",
+          type: "page",
+        },
+      ];
+    }
+
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
@@ -137,6 +147,20 @@ function createProfileContext(
 
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+
+    if (profile.driver === "extension") {
+      await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      const tabhr = createTabhrClient(profile.cdpUrl);
+      const data = await tabhr.navigate(url, 8000);
+      const profileState = getProfileState();
+      profileState.lastTargetId = TABHR_TARGET_ID;
+      return {
+        targetId: TABHR_TARGET_ID,
+        title: data.title ?? "",
+        url: data.url ?? url,
+        type: "page",
+      };
+    }
 
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
@@ -247,12 +271,18 @@ function createProfileContext(
   };
 
   const isReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "extension") {
+      return await isTabhrReachable(profile.cdpUrl, resolveRemoteHttpTimeout(timeoutMs) ?? 2000);
+    }
     const httpTimeout = resolveRemoteHttpTimeout(timeoutMs);
     const wsTimeout = resolveRemoteWsTimeout(timeoutMs);
     return await isChromeCdpReady(profile.cdpUrl, httpTimeout, wsTimeout);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "extension") {
+      return await isTabhrReachable(profile.cdpUrl, resolveRemoteHttpTimeout(timeoutMs) ?? 2000);
+    }
     const httpTimeout = resolveRemoteHttpTimeout(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeout);
   };
@@ -285,24 +315,13 @@ function createProfileContext(
     }
 
     if (isExtension) {
+      // TabHR browser extension uses JSON envelope API at profile.cdpUrl (e.g. :9220); no CDP.
       if (!httpReachable) {
-        await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
-        if (await isHttpReachable(1200)) {
-          // continue: we still need the extension to connect for CDP websocket.
-        } else {
-          throw new Error(
-            `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
-          );
-        }
+        throw new Error(
+          `TabHR browser extension for profile "${profile.name}" is not reachable at ${profile.cdpUrl}. Ensure the TabHR extension is running on that port.`,
+        );
       }
-
-      if (await isReachable(600)) {
-        return;
-      }
-      // Relay server is up, but no attached tab yet. Prompt user to attach.
-      throw new Error(
-        `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
-      );
+      return;
     }
 
     if (!httpReachable) {
@@ -372,8 +391,8 @@ function createProfileContext(
     if (tabs1.length === 0) {
       if (profile.driver === "extension") {
         throw new Error(
-          `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
-            "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
+          `tab not found (no tabs for profile "${profile.name}" at ${profile.cdpUrl}). ` +
+            "Ensure the TabHR browser extension is running and open a tab.",
         );
       }
       await openTab("about:blank");
@@ -427,6 +446,14 @@ function createProfileContext(
   };
 
   const focusTab = async (targetId: string): Promise<void> => {
+    if (profile.driver === "extension") {
+      const tabs = await listTabs();
+      const resolved = resolveTargetIdFromTabs(targetId, tabs);
+      if (resolved.ok) {
+        getProfileState().lastTargetId = resolved.targetId;
+      }
+      return;
+    }
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -457,6 +484,9 @@ function createProfileContext(
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
+    if (profile.driver === "extension") {
+      return;
+    }
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -485,10 +515,8 @@ function createProfileContext(
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     if (profile.driver === "extension") {
-      const stopped = await stopChromeExtensionRelayServer({
-        cdpUrl: profile.cdpUrl,
-      });
-      return { stopped };
+      // TabHR uses direct CDP; we do not run a relay, so nothing to stop.
+      return { stopped: false };
     }
     const profileState = getProfileState();
     if (!profileState.running) {
@@ -501,7 +529,6 @@ function createProfileContext(
 
   const resetProfile = async () => {
     if (profile.driver === "extension") {
-      await stopChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(() => {});
       return { moved: false, from: profile.cdpUrl };
     }
     if (!profile.cdpIsLoopback) {
@@ -613,9 +640,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           // Browser might not be responsive
         }
       } else {
-        // Check if something is listening on the port
         try {
-          const reachable = await isChromeReachable(profile.cdpUrl, 200);
+          const reachable =
+            profile.driver === "extension"
+              ? await isTabhrReachable(profile.cdpUrl, 500)
+              : await isChromeReachable(profile.cdpUrl, 200);
           if (reachable) {
             running = true;
             const ctx = createProfileContext(opts, profile);

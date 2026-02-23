@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { resolveProfileMock, ensureChromeExtensionRelayServerMock } = vi.hoisted(() => ({
+const { resolveProfileMock } = vi.hoisted(() => ({
   resolveProfileMock: vi.fn(),
-  ensureChromeExtensionRelayServerMock: vi.fn(),
 }));
 
 const { createBrowserRouteContextMock, listKnownProfileNamesMock } = vi.hoisted(() => ({
@@ -12,10 +11,6 @@ const { createBrowserRouteContextMock, listKnownProfileNamesMock } = vi.hoisted(
 
 vi.mock("./config.js", () => ({
   resolveProfile: resolveProfileMock,
-}));
-
-vi.mock("./extension-relay.js", () => ({
-  ensureChromeExtensionRelayServer: ensureChromeExtensionRelayServerMock,
 }));
 
 vi.mock("./server-context.js", () => ({
@@ -28,17 +23,15 @@ import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./ser
 describe("ensureExtensionRelayForProfiles", () => {
   beforeEach(() => {
     resolveProfileMock.mockReset();
-    ensureChromeExtensionRelayServerMock.mockReset();
   });
 
-  it("starts relay only for extension profiles", async () => {
+  it("does not start relay (TabHR uses direct CDP on port 9220)", async () => {
     resolveProfileMock.mockImplementation((_resolved: unknown, name: string) => {
       if (name === "chrome") {
-        return { driver: "extension", cdpUrl: "http://127.0.0.1:18888" };
+        return { driver: "extension", cdpUrl: "http://127.0.0.1:9220" };
       }
       return { driver: "openclaw", cdpUrl: "http://127.0.0.1:18889" };
     });
-    ensureChromeExtensionRelayServerMock.mockResolvedValue(undefined);
 
     await ensureExtensionRelayForProfiles({
       resolved: {
@@ -50,25 +43,8 @@ describe("ensureExtensionRelayForProfiles", () => {
       onWarn: vi.fn(),
     });
 
-    expect(ensureChromeExtensionRelayServerMock).toHaveBeenCalledTimes(1);
-    expect(ensureChromeExtensionRelayServerMock).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18888",
-    });
-  });
-
-  it("reports relay startup errors", async () => {
-    resolveProfileMock.mockReturnValue({ driver: "extension", cdpUrl: "http://127.0.0.1:18888" });
-    ensureChromeExtensionRelayServerMock.mockRejectedValue(new Error("boom"));
-    const onWarn = vi.fn();
-
-    await ensureExtensionRelayForProfiles({
-      resolved: { profiles: { chrome: {} } } as never,
-      onWarn,
-    });
-
-    expect(onWarn).toHaveBeenCalledWith(
-      'Chrome extension relay init failed for profile "chrome": Error: boom',
-    );
+    // TabHR: no relay started; extension profile uses direct CDP.
+    expect(resolveProfileMock).toHaveBeenCalled();
   });
 });
 

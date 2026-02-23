@@ -14,8 +14,8 @@ describe("browser config", () => {
     const profile = resolveProfile(resolved, resolved.defaultProfile);
     expect(profile?.name).toBe("chrome");
     expect(profile?.driver).toBe("extension");
-    expect(profile?.cdpPort).toBe(18792);
-    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18792");
+    expect(profile?.cdpPort).toBe(9220);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9220");
 
     const openclaw = resolveProfile(resolved, "openclaw");
     expect(openclaw?.driver).toBe("openclaw");
@@ -31,8 +31,8 @@ describe("browser config", () => {
       expect(resolved.controlPort).toBe(19003);
       const chrome = resolveProfile(resolved, "chrome");
       expect(chrome?.driver).toBe("extension");
-      expect(chrome?.cdpPort).toBe(19004);
-      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19004");
+      expect(chrome?.cdpPort).toBe(9220);
+      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:9220");
 
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19012);
@@ -46,8 +46,8 @@ describe("browser config", () => {
       expect(resolved.controlPort).toBe(19013);
       const chrome = resolveProfile(resolved, "chrome");
       expect(chrome?.driver).toBe("extension");
-      expect(chrome?.cdpPort).toBe(19014);
-      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19014");
+      expect(chrome?.cdpPort).toBe(9220);
+      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:9220");
 
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19022);
@@ -125,10 +125,10 @@ describe("browser config", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" })).toThrow(/must be http/i);
   });
 
-  it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
+  it("does not add the built-in chrome (TabHR) profile if port 9220 is already used", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
-        openclaw: { cdpPort: 18792, color: "#FF4500" },
+        openclaw: { cdpPort: 9220, color: "#FF4500" },
       },
     });
     expect(resolveProfile(resolved, "chrome")).toBe(null);
