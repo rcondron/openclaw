@@ -390,6 +390,20 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
+  // Webhook server: default port 3334 for Twilio (and other) HTTP POSTs; override via VOICECHAT_WEBHOOK_PORT
+  resolved.serve = resolved.serve ?? {
+    port: 3334,
+    bind: "127.0.0.1",
+    path: "/voice/webhook",
+  };
+  const envPort = process.env.VOICECHAT_WEBHOOK_PORT;
+  if (envPort !== undefined && envPort !== "") {
+    const n = Number(envPort);
+    if (Number.isInteger(n) && n > 0) {
+      resolved.serve.port = n;
+    }
+  }
+
   return resolved;
 }
 

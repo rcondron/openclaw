@@ -31,6 +31,7 @@ function buildSkillsSection(params: {
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
+    "- For voice-related tasks (calls, voice chat, Twilio, Teams, Zoom, WhatsApp voice): use the voicechat skill.",
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
@@ -135,7 +136,8 @@ function buildMessagingSection(params: {
   }
   return [
     "## Messaging",
-    "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    "- Reply in current session → automatically routes to the source channel (Signal, Telegram, WhatsApp, etc.).",
+    "- OpenClaw supports WhatsApp when enabled and linked (QR login). Do not tell users WhatsApp is unsupported; if it is unavailable, suggest checking channel status or running openclaw channels login for WhatsApp.",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
@@ -504,6 +506,11 @@ export function buildAgentSystemPrompt(params: {
       : "",
     "## Workspace",
     `Your working directory is: ${displayWorkspaceDir}`,
+    ...(isMinimal
+      ? []
+      : [
+          "Check TABHR_CREDENTIALS_AND_CHANNELS.md in your workspace for current TabHR credentials and channel config; use it to stay in sync with TabHR.",
+        ]),
     workspaceGuidance,
     ...workspaceNotes,
     "",

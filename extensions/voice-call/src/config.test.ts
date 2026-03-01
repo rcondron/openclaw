@@ -190,6 +190,21 @@ describe("validateProviderConfig", () => {
     });
   });
 
+  describe("resolveVoiceCallConfig serve port", () => {
+    it("uses VOICECHAT_WEBHOOK_PORT when set to a positive integer", () => {
+      process.env.VOICECHAT_WEBHOOK_PORT = "5555";
+      const config = resolveVoiceCallConfig(createBaseConfig("twilio"));
+      expect(config.serve.port).toBe(5555);
+      delete process.env.VOICECHAT_WEBHOOK_PORT;
+    });
+
+    it("keeps config serve.port when VOICECHAT_WEBHOOK_PORT is unset", () => {
+      delete process.env.VOICECHAT_WEBHOOK_PORT;
+      const config = resolveVoiceCallConfig(createBaseConfig("twilio"));
+      expect(config.serve.port).toBe(3334);
+    });
+  });
+
   describe("disabled config", () => {
     it("skips validation when enabled is false", () => {
       const config = createBaseConfig("twilio");

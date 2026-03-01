@@ -46,6 +46,8 @@ COPY --chown=node:node . .
 RUN pnpm build
 
 ENV NODE_ENV=production
+# Disable gateway update alerts in this image (version is managed by the image, not openclaw update).
+ENV OPENCLAW_SKIP_UPDATE_CHECK=1
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)

@@ -42,6 +42,10 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return true;
   }
+  // TabHR/Docker or ops can disable update alerts (e.g. container builds).
+  if (process.env.OPENCLAW_SKIP_UPDATE_CHECK === "1" || process.env.OPENCLAW_SKIP_UPDATE_CHECK === "true") {
+    return true;
+  }
   return false;
 }
 
