@@ -142,16 +142,17 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+/** Returns assistant text from result; empty string when no payloads or no text (caller should return 503 or empty content, not a phrase). */
 function resolveAgentResponseText(result: unknown): string {
   const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
-    return "No response from OpenClaw.";
+    return "";
   }
   const content = payloads
     .map((p) => (typeof p.text === "string" ? p.text : ""))
     .filter(Boolean)
     .join("\n\n");
-  return content || "No response from OpenClaw.";
+  return content ?? "";
 }
 
 export async function handleOpenAiHttpRequest(
@@ -212,6 +213,16 @@ export async function handleOpenAiHttpRequest(
       );
 
       const content = resolveAgentResponseText(result);
+
+      if (content === "") {
+        sendJson(res, 503, {
+          error: {
+            message: "No response from model.",
+            type: "api_error",
+          },
+        });
+        return true;
+      }
 
       sendJson(res, 200, {
         id: runId,
@@ -362,7 +373,7 @@ export async function handleOpenAiHttpRequest(
         choices: [
           {
             index: 0,
-            delta: { content: "Error: internal error" },
+            delta: { content: "" },
             finish_reason: "stop",
           },
         ],

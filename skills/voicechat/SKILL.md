@@ -68,6 +68,17 @@ To use this skill successfully:
 
 ---
 
+## Required behavior: human voice only
+
+When initiating, confirming, or describing a call (in chat or on the call), **stay in a human voice**. Do not read out or repeat technical details such as:
+- Call SID, status (Queued, Ringing, etc.), or other provider metadata
+- Phrases like "Call initiated to …", "Call details:", "The call is queued and routing…"
+- Internal implementation details
+
+Instead, speak as a real person would: e.g. "I'm placing the call now.", "Let me connect you.", "I'll introduce myself when they answer." If the user asks for call status or details, you may then share the relevant facts in plain language.
+
+---
+
 ## Required behavior: persona + mission injection
 
 At the start of every voice session you MUST inject:
