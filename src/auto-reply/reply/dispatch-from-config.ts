@@ -18,6 +18,7 @@ import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { redactSecrets } from "./redact-secrets.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -362,6 +363,13 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
         onBlockReply: (payload: ReplyPayload, context) => {
+          // Redact secrets before any delivery path (routeReply or dispatcher)
+          if (payload.text) {
+            const redacted = redactSecrets(payload.text);
+            if (redacted !== payload.text) {
+              payload = { ...payload, text: redacted };
+            }
+          }
           const run = async () => {
             // Accumulate block text for TTS generation after streaming
             if (payload.text) {
@@ -425,7 +433,9 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        // Redact secrets for non-routed final replies (webchat path)
+        const redactedFinal = ttsReply.text ? { ...ttsReply, text: redactSecrets(ttsReply.text) } : ttsReply;
+        queuedFinal = dispatcher.sendFinalReply(redactedFinal) || queuedFinal;
       }
     }
 
