@@ -144,7 +144,11 @@ async function fetchHttpJson<T>(
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(text || `HTTP ${res.status}`);
+      const httpErr = new Error(text || `HTTP ${res.status}`);
+      if (res.status < 500) {
+        (httpErr as Error & { browserAppError: boolean }).browserAppError = true;
+      }
+      throw httpErr;
     }
     return (await res.json()) as T;
   } finally {
@@ -239,10 +243,15 @@ export async function fetchBrowserJson<T>(
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `HTTP ${result.status}`;
-      throw new Error(message);
+      const appErr = new Error(message);
+      (appErr as Error & { browserAppError: boolean }).browserAppError = true;
+      throw appErr;
     }
     return result.body as T;
   } catch (err) {
+    if (err && typeof err === "object" && (err as { browserAppError?: boolean }).browserAppError) {
+      throw err;
+    }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
 }

@@ -17,10 +17,11 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(9220);
     expect(profile?.cdpUrl).toBe("http://127.0.0.1:9220");
 
-    const openclaw = resolveProfile(resolved, "openclaw");
-    expect(openclaw?.driver).toBe("openclaw");
-    expect(openclaw?.cdpPort).toBe(18800);
-    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
+    const browserless = resolveProfile(resolved, "browserless");
+    expect(browserless?.name).toBe("browserless");
+    expect(browserless?.driver).toBe("openclaw");
+    expect(browserless?.cdpPort).toBe(18800);
+    expect(browserless?.cdpUrl).toBe("http://127.0.0.1:18800");
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
@@ -34,9 +35,9 @@ describe("browser config", () => {
       expect(chrome?.cdpPort).toBe(9220);
       expect(chrome?.cdpUrl).toBe("http://127.0.0.1:9220");
 
-      const openclaw = resolveProfile(resolved, "openclaw");
-      expect(openclaw?.cdpPort).toBe(19012);
-      expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19012");
+      const browserless = resolveProfile(resolved, "browserless");
+      expect(browserless?.cdpPort).toBe(19012);
+      expect(browserless?.cdpUrl).toBe("http://127.0.0.1:19012");
     });
   });
 
@@ -49,9 +50,9 @@ describe("browser config", () => {
       expect(chrome?.cdpPort).toBe(9220);
       expect(chrome?.cdpUrl).toBe("http://127.0.0.1:9220");
 
-      const openclaw = resolveProfile(resolved, "openclaw");
-      expect(openclaw?.cdpPort).toBe(19022);
-      expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19022");
+      const browserless = resolveProfile(resolved, "browserless");
+      expect(browserless?.cdpPort).toBe(19022);
+      expect(browserless?.cdpUrl).toBe("http://127.0.0.1:19022");
     });
   });
 
@@ -82,7 +83,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
     });
-    const profile = resolveProfile(resolved, "openclaw");
+    const profile = resolveProfile(resolved, "browserless");
     expect(profile?.cdpIsLoopback).toBe(false);
   });
 
@@ -90,7 +91,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
     });
-    const profile = resolveProfile(resolved, "openclaw");
+    const profile = resolveProfile(resolved, "browserless");
     expect(profile?.cdpPort).toBe(9222);
     expect(profile?.cdpUrl).toBe("http://example.com:9222");
     expect(profile?.cdpIsLoopback).toBe(false);
@@ -128,11 +129,11 @@ describe("browser config", () => {
   it("does not add the built-in chrome (TabHR) profile if port 9220 is already used", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
-        openclaw: { cdpPort: 9220, color: "#FF4500" },
+        browserless: { cdpPort: 9220, color: "#FF4500" },
       },
     });
     expect(resolveProfile(resolved, "chrome")).toBe(null);
-    expect(resolved.defaultProfile).toBe("openclaw");
+    expect(resolved.defaultProfile).toBe("browserless");
   });
 
   it("defaults extraArgs to empty array when not provided", () => {

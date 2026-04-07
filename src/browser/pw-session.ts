@@ -315,6 +315,35 @@ function observeBrowser(browser: Browser) {
   }
 }
 
+/**
+ * For remote (non-loopback) CDP URLs, convert the HTTP(S) URL to a direct
+ * WebSocket endpoint. Services like Browserless.io expose CDP via
+ * `wss://host/chrome?token=…` — going through /json/version returns ephemeral
+ * session URLs that expire immediately and can't be reused by connectOverCDP.
+ */
+function toDirectWsEndpoint(cdpUrl: string): string | null {
+  try {
+    const u = new URL(cdpUrl);
+    const host = u.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "0.0.0.0" ||
+      host === "host.docker.internal"
+    ) {
+      return null;
+    }
+    u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+    if (!u.pathname || u.pathname === "/") {
+      u.pathname = "/chrome";
+    }
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) {
@@ -326,11 +355,17 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
+    const directWs = toDirectWsEndpoint(normalized);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
-        const endpoint = wsUrl ?? normalized;
+        const timeout = directWs ? 30000 + attempt * 5000 : 5000 + attempt * 2000;
+        let endpoint: string;
+        if (directWs) {
+          endpoint = directWs;
+        } else {
+          const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
+          endpoint = wsUrl ?? normalized;
+        }
         const headers = getHeadersWithAuth(endpoint);
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
         const onDisconnected = () => {

@@ -20,7 +20,7 @@ import {
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_BROWSERLESS_PROFILE_NAME,
 } from "./constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
@@ -59,7 +59,7 @@ function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecu
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
-export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
+export function resolveOpenClawUserDataDir(profileName = DEFAULT_BROWSERLESS_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 

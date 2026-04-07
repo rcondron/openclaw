@@ -348,6 +348,13 @@ function createProfileContext(
       return;
     }
 
+    // For remote CDP (e.g. Browserless.io), the /json/version WebSocket URL
+    // may be ephemeral and fail handshake. HTTP reachability is sufficient;
+    // Playwright's connectOverCDP handles the actual connection with fallback.
+    if (remoteCdp && !profileState.running) {
+      return;
+    }
+
     // HTTP responds but WebSocket fails - port in use by something else
     if (!profileState.running) {
       throw new Error(

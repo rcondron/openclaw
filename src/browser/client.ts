@@ -330,7 +330,7 @@ export async function browserSnapshot(
     q.set("profile", opts.profile);
   }
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
+    timeoutMs: 60000,
   });
 }
 

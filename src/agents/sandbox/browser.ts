@@ -4,7 +4,7 @@ import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_BROWSERLESS_PROFILE_NAME,
 } from "../../browser/constants.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -84,10 +84,10 @@ function buildSandboxBrowserResolvedConfig(params: {
     headless: params.headless,
     noSandbox: false,
     attachOnly: true,
-    defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+    defaultProfile: DEFAULT_BROWSERLESS_PROFILE_NAME,
     extraArgs: [],
     profiles: {
-      [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
+      [DEFAULT_BROWSERLESS_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
@@ -277,7 +277,7 @@ export async function ensureSandboxBrowser(params: {
 
   const existing = BROWSER_BRIDGES.get(params.scopeKey);
   const existingProfile = existing
-    ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
+    ? resolveProfile(existing.bridge.state.resolved, DEFAULT_BROWSERLESS_PROFILE_NAME)
     : null;
 
   let desiredAuthToken = params.bridgeAuth?.token?.trim() || undefined;

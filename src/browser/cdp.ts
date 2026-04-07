@@ -94,14 +94,40 @@ export async function createTargetViaCdp(opts: {
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
 
-  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
-    appendCdpPath(opts.cdpUrl, "/json/version"),
-    1500,
-  );
-  const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
-  const wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
+  let wsUrl = "";
+
+  // For remote (non-loopback) endpoints, /json/version returns ephemeral
+  // session WS URLs that can't be reused. Build a direct WS URL instead.
+  try {
+    const u = new URL(opts.cdpUrl);
+    const host = u.hostname.toLowerCase();
+    const isRemote =
+      host !== "localhost" &&
+      host !== "127.0.0.1" &&
+      host !== "[::1]" &&
+      host !== "0.0.0.0" &&
+      host !== "host.docker.internal";
+    if (isRemote) {
+      u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+      if (!u.pathname || u.pathname === "/") {
+        u.pathname = "/chrome";
+      }
+      wsUrl = u.toString().replace(/\/$/, "");
+    }
+  } catch {
+    // fall through to /json/version
+  }
+
   if (!wsUrl) {
-    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+    const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+      appendCdpPath(opts.cdpUrl, "/json/version"),
+      1500,
+    );
+    const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
+    wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
+    if (!wsUrl) {
+      throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+    }
   }
 
   return await withCdpSocket(wsUrl, async (send) => {

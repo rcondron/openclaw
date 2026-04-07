@@ -3,7 +3,7 @@ import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-serv
 import type { ResolvedBrowserConfig } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_BROWSERLESS_PROFILE_NAME,
 } from "./constants.js";
 
 function buildResolvedConfig(): ResolvedBrowserConfig {
@@ -22,9 +22,9 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
     headless: true,
     noSandbox: false,
     attachOnly: true,
-    defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+    defaultProfile: DEFAULT_BROWSERLESS_PROFILE_NAME,
     profiles: {
-      [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
+      [DEFAULT_BROWSERLESS_PROFILE_NAME]: {
         cdpPort: 1,
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },

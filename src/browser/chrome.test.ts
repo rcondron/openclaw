@@ -14,7 +14,7 @@ import {
 } from "./chrome.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_BROWSERLESS_PROFILE_NAME,
 } from "./constants.js";
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
@@ -58,8 +58,8 @@ describe("browser chrome profile decoration", () => {
     const infoCache = profile.info_cache as Record<string, unknown>;
     const def = infoCache.Default as Record<string, unknown>;
 
-    expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
-    expect(def.shortcut_name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    expect(def.name).toBe(DEFAULT_BROWSERLESS_PROFILE_NAME);
+    expect(def.shortcut_name).toBe(DEFAULT_BROWSERLESS_PROFILE_NAME);
     expect(def.profile_color_seed).toBe(expectedSignedArgb);
     expect(def.profile_highlight_color).toBe(expectedSignedArgb);
     expect(def.default_avatar_fill_color).toBe(expectedSignedArgb);
@@ -89,7 +89,7 @@ describe("browser chrome profile decoration", () => {
     const infoCache = profile.info_cache as Record<string, unknown>;
     const def = infoCache.Default as Record<string, unknown>;
 
-    expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    expect(def.name).toBe(DEFAULT_BROWSERLESS_PROFILE_NAME);
     expect(def.profile_color_seed).toBeUndefined();
   });
 
@@ -127,7 +127,7 @@ describe("browser chrome profile decoration", () => {
 
     const prefs = await readJson(path.join(userDataDir, "Default", "Preferences"));
     const profile = prefs.profile as Record<string, unknown>;
-    expect(profile.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+    expect(profile.name).toBe(DEFAULT_BROWSERLESS_PROFILE_NAME);
   });
 });
 

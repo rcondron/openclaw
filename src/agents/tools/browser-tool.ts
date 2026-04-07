@@ -230,7 +230,7 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via the browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for TabHR browser extension (CDP on port 9220). Use profile="openclaw" for the isolated openclaw-managed browser.',
+      'Profiles: use profile="chrome" for TabHR browser extension (CDP on port 9220). Use profile="browserless" for the isolated OpenClaw-managed browser (legacy name: openclaw).',
       'If the user mentions the TabHR extension or browser on port 9220, use profile="chrome".',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "TabHR profile (chrome) connects to CDP at http://127.0.0.1:9220. Ensure the TabHR extension or browser is running on that port with at least one tab open.",

@@ -13,7 +13,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_BROWSERLESS_PROFILE_NAME,
 } from "./constants.js";
 import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
@@ -120,7 +120,8 @@ export function parseHttpUrl(raw: string, label: string) {
 }
 
 /**
- * Ensure the default "openclaw" profile exists in the profiles map.
+ * Ensure the default managed browser profile (`browserless`) exists in the profiles map.
+ * Migrates legacy key `openclaw` → `browserless` when present.
  * Auto-creates it with the legacy CDP port (from browser.cdpUrl) or first port if missing.
  */
 function ensureDefaultProfile(
@@ -130,8 +131,12 @@ function ensureDefaultProfile(
   derivedDefaultCdpPort?: number,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
-    result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
+  if (result.openclaw && !result.browserless) {
+    result.browserless = result.openclaw;
+    delete result.openclaw;
+  }
+  if (!result[DEFAULT_BROWSERLESS_PROFILE_NAME]) {
+    result[DEFAULT_BROWSERLESS_PROFILE_NAME] = {
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START,
       color: defaultColor,
     };
@@ -211,7 +216,9 @@ export function resolveBrowserConfig(
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
-  const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
+  const defaultProfileFromConfigRaw = cfg?.defaultProfile?.trim() || undefined;
+  const defaultProfileFromConfig =
+    defaultProfileFromConfigRaw === "openclaw" ? "browserless" : defaultProfileFromConfigRaw;
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const profiles = ensureDefaultChromeExtensionProfile(
@@ -223,7 +230,7 @@ export function resolveBrowserConfig(
     defaultProfileFromConfig ??
     (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-      : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+      : DEFAULT_BROWSERLESS_PROFILE_NAME);
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -259,7 +266,8 @@ export function resolveProfile(
   resolved: ResolvedBrowserConfig,
   profileName: string,
 ): ResolvedBrowserProfile | null {
-  const profile = resolved.profiles[profileName];
+  const normalizedName = profileName === "openclaw" ? "browserless" : profileName;
+  const profile = resolved.profiles[normalizedName];
   if (!profile) {
     return null;
   }
@@ -271,18 +279,18 @@ export function resolveProfile(
   const driver = profile.driver === "extension" ? "extension" : "openclaw";
 
   if (rawProfileUrl) {
-    const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
+    const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${normalizedName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
     cdpPort = parsed.port;
     cdpUrl = parsed.normalized;
   } else if (cdpPort) {
     cdpUrl = `${resolved.cdpProtocol}://${resolved.cdpHost}:${cdpPort}`;
   } else {
-    throw new Error(`Profile "${profileName}" must define cdpPort or cdpUrl.`);
+    throw new Error(`Profile "${normalizedName}" must define cdpPort or cdpUrl.`);
   }
 
   return {
-    name: profileName,
+    name: normalizedName,
     cdpPort,
     cdpUrl,
     cdpHost,

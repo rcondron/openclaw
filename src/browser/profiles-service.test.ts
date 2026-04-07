@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
@@ -99,9 +100,9 @@ describe("BrowserProfilesService", () => {
 
     vi.mocked(loadConfig).mockReturnValue({
       browser: {
-        defaultProfile: "openclaw",
+        defaultProfile: "browserless",
         profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
+          browserless: { cdpPort: 18800, color: "#FF4500" },
           remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
         },
       },
@@ -125,15 +126,15 @@ describe("BrowserProfilesService", () => {
 
     vi.mocked(loadConfig).mockReturnValue({
       browser: {
-        defaultProfile: "openclaw",
+        defaultProfile: "browserless",
         profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
+          browserless: { cdpPort: 18800, color: "#FF4500" },
           work: { cdpPort: 18801, color: "#0066CC" },
         },
       },
     });
 
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-profile-"));
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);

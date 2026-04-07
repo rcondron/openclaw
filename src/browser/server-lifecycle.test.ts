@@ -37,7 +37,7 @@ describe("ensureExtensionRelayForProfiles", () => {
       resolved: {
         profiles: {
           chrome: {},
-          openclaw: {},
+          browserless: {},
         },
       } as never,
       onWarn: vi.fn(),
@@ -55,9 +55,9 @@ describe("stopKnownBrowserProfiles", () => {
   });
 
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "chrome"]);
+    listKnownProfileNamesMock.mockReturnValue(["browserless", "chrome"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
-      openclaw: vi.fn(async () => {}),
+      browserless: vi.fn(async () => {}),
       chrome: vi.fn(async () => {
         throw new Error("profile stop failed");
       }),
@@ -75,7 +75,7 @@ describe("stopKnownBrowserProfiles", () => {
       onWarn,
     });
 
-    expect(stopMap.openclaw).toHaveBeenCalledTimes(1);
+    expect(stopMap.browserless).toHaveBeenCalledTimes(1);
     expect(stopMap.chrome).toHaveBeenCalledTimes(1);
     expect(onWarn).not.toHaveBeenCalled();
   });

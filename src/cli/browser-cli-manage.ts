@@ -48,7 +48,7 @@ async function runBrowserToggle(
     defaultRuntime.log(JSON.stringify(status, null, 2));
     return;
   }
-  const name = status.profile ?? "openclaw";
+  const name = status.profile ?? "browserless";
   defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}`));
 }
 
@@ -94,7 +94,7 @@ export function registerBrowserManageCommands(
         const detectedDisplay = detectedPath ? shortenHomePath(detectedPath) : "auto";
         defaultRuntime.log(
           [
-            `profile: ${status.profile ?? "openclaw"}`,
+            `profile: ${status.profile ?? "browserless"}`,
             `enabled: ${status.enabled}`,
             `running: ${status.running}`,
             `cdpPort: ${status.cdpPort}`,
