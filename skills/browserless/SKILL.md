@@ -1,73 +1,104 @@
 ---
 name: browserless
-description: Browse the web via Browserless.io BrowserQL — stealth browser automation with CAPTCHA solving, residential proxies, and bot-detection bypass. Use when navigating protected sites, scraping data from sites that block bots, solving CAPTCHAs (Cloudflare, reCAPTCHA, hCaptcha), or when the built-in browser tool gets blocked or flagged. Also use for headless/containerized environments without a local browser.
+description: Browse the web via Browserless.io using OpenClaw's browser tool over CDP/WebSocket (Playwright). Use for protected sites, containerized browsing, or when a remote managed browser is configured. Do not use BrowserQL/BQL — use profile="browserless" with the browser tool.
 ---
 
-# Browserless BQL
+# Browserless (CDP / WebSocket)
 
-Execute BrowserQL (GraphQL) mutations against Browserless.io's managed stealth browsers.
+OpenClaw connects to [Browserless.io](https://browserless.io) over **Chrome DevTools Protocol (CDP) via WebSocket**. Playwright attaches with `connectOverCDP` — the same path as the built-in `browser` tool. **Do not use BrowserQL (BQL) or GraphQL mutations.**
 
-## Setup
+## How It Works
 
-Requires `BROWSERLESS_API_TOKEN` env var. Get token from https://browserless.io/account/
+1. `openclaw.json` sets `browser.cdpUrl` (or `browser.profiles.browserless.cdpUrl`) to a Browserless HTTP endpoint, e.g. `https://chrome.browserless.io?token=YOUR_TOKEN`
+2. OpenClaw upgrades that to **WSS** and drives the browser through Playwright
+3. The agent uses the **`browser` tool** with `profile="browserless"` (TabHR default)
 
-## Quick Start
+TabHR containers typically ship with `attachOnly: true` and a preconfigured remote `cdpUrl` — no local Chrome launch.
 
-Run BQL queries via the helper script:
+## When to Use
 
-```bash
-node skills/browserless-bql/scripts/bql.js 'mutation { goto(url: "https://example.com", waitUntil: firstMeaningfulPaint) { status } text { text } }' --stealth
+- Remote / headless browsing in Docker (no local browser)
+- Browserless-managed Chrome with token auth
+- Sites that need a real browser session (navigation, forms, snapshots, screenshots)
+- When `profile="chrome"` (TabHR extension on :9220) is not available or not appropriate
+
+## Configuration
+
+| Setting                               | Purpose                                                           |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `browser.enabled`                     | Enable browser control (default true in TabHR)                    |
+| `browser.attachOnly`                  | Attach to remote CDP only; do not launch local Chrome             |
+| `browser.cdpUrl`                      | Browserless HTTP URL with `?token=` (converted to WSS internally) |
+| `browser.defaultProfile`              | Usually `"browserless"` in TabHR                                  |
+| `browser.profiles.browserless.cdpUrl` | Per-profile override (same format)                                |
+
+Token can live in the CDP URL query string (`?token=...`). `BROWSERLESS_API_TOKEN` is optional if the token is already in `cdpUrl`.
+
+## Quick Reference — Use the `browser` Tool
+
+**Always use the built-in `browser` tool.** Never run BQL scripts or GraphQL against Browserless.
+
+### Check connection
+
+```json
+{ "action": "status", "profile": "browserless" }
 ```
 
-### Options
+### Open a tab / navigate
 
-- `--stealth` — Use `/stealth/bql` endpoint (recommended for protected sites)
-- `--endpoint sfo|lon|ams` — Regional endpoint (default: sfo)
-- `--vars '{"key":"val"}'` — GraphQL variables
-- `--save screenshot.png` — Save screenshot base64 to file
+```json
+{ "action": "open", "profile": "browserless", "url": "https://example.com" }
+```
 
-## Key Mutations
+```json
+{ "action": "navigate", "profile": "browserless", "url": "https://example.com" }
+```
 
-| Mutation | Purpose |
-|---|---|
-| `goto(url)` | Navigate to URL |
-| `click(selector)` | Click element |
-| `type(text, selector)` | Type into input |
-| `text(selector?)` | Extract text |
-| `html(selector?, clean?)` | Extract HTML (use `clean` for LLM-friendly output) |
-| `screenshot(fullPage?)` | Capture screenshot (returns base64) |
-| `solve(type?)` | Auto-solve CAPTCHAs |
-| `waitForSelector(selector)` | Wait for element |
-| `evaluate(expression)` | Run JavaScript |
+### Snapshot page (for reading / automation refs)
 
-## When to Use Stealth
+```json
+{ "action": "snapshot", "profile": "browserless", "refs": "aria" }
+```
 
-Always use `--stealth` for:
-- Sites with Cloudflare protection
-- LinkedIn, Indeed, Google, Amazon
-- Any site that serves CAPTCHAs
-- Rate-limited APIs accessed via browser
+Use `refs="aria"` for stable Playwright aria-ref ids across `act` calls.
 
-## CAPTCHA Solving
+### Click / type (after snapshot)
 
-```graphql
-mutation SolveAndScrape {
-  goto(url: "https://protected-site.com", waitUntil: firstMeaningfulPaint) { status }
-  solve { found solved time }
-  text(selector: ".content") { text }
+```json
+{
+  "action": "act",
+  "profile": "browserless",
+  "kind": "click",
+  "ref": "e12",
+  "targetId": "<from snapshot>"
 }
 ```
 
-`solve` auto-detects CAPTCHA type. Force type with `solve(type: cloudflare)`.
+### Screenshot
 
-## Clean HTML for LLMs
-
-Strip markup to minimize tokens:
-
-```graphql
-html(clean: { removeAttributes: true, removeNonTextNodes: true }) { html }
+```json
+{ "action": "screenshot", "profile": "browserless", "fullPage": true }
 ```
 
-## Full BQL Schema
+## Profiles
 
-For all mutations, arguments, and patterns: read `references/bql-schema.md`
+| Profile       | Use when                                                         |
+| ------------- | ---------------------------------------------------------------- |
+| `browserless` | Remote Browserless CDP (WebSocket) — default in TabHR containers |
+| `chrome`      | TabHR browser extension relay on `http://127.0.0.1:9220`         |
+
+## Do Not Use
+
+- BrowserQL / BQL GraphQL mutations (`/chromium/bql`, `/stealth/bql`)
+- Custom fetch scripts to Browserless GraphQL endpoints
+- `pdftoppm`-style workarounds for browser tasks — use `browser` snapshot/screenshot instead
+
+## Troubleshooting
+
+- **`browser` status fails / timeout:** Check `browser.cdpUrl` token and network reachability to Browserless
+- **Empty tabs:** Run `action: "open"` with a URL first
+- **Refs not found:** Re-run `snapshot` on the same tab; pass `targetId` from the snapshot into subsequent `act` calls
+
+## Under the Hood
+
+OpenClaw core: `src/browser/pw-*.ts` (Playwright over CDP), `src/browser/cdp.ts` (HTTP → WSS normalization for remote hosts like `*.browserless.io`).

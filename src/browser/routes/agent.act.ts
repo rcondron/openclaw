@@ -77,30 +77,53 @@ export function registerBrowserAgentActRoutes(
             case "click": {
               const x = toNumber(body.x) ?? 0;
               const y = toNumber(body.y) ?? 0;
-              await tabhr.click(x, y, 8000);
+              await tabhr.click(x, y, tab.targetId, 8000);
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             }
             case "type": {
               const text = typeof body.text === "string" ? body.text : "";
-              await tabhr.type(text, 8000);
+              await tabhr.type(text, tab.targetId, 8000);
               return res.json({ ok: true, targetId: tab.targetId });
             }
             case "press": {
               const key = toStringOrEmpty(body.key) || "Enter";
-              await tabhr.keypress(key, 8000);
+              await tabhr.keypress(key, tab.targetId, 8000);
               return res.json({ ok: true, targetId: tab.targetId });
             }
             case "scrollIntoView": {
               const deltaX = toNumber(body.deltaX) ?? 0;
               const deltaY = toNumber(body.deltaY) ?? toNumber(body.y) ?? 300;
-              await tabhr.scroll(deltaX, deltaY, 8000);
+              await tabhr.scroll(deltaX, deltaY, tab.targetId, 8000);
               return res.json({ ok: true, targetId: tab.targetId });
+            }
+            case "evaluate": {
+              const fn = toStringOrEmpty(body.fn);
+              if (!fn) {
+                return jsonError(res, 400, "fn is required");
+              }
+              const world = body.world === "ISOLATED" ? "ISOLATED" : "MAIN";
+              const evalTimeoutMs = toNumber(body.timeoutMs);
+              const scriptResult = await tabhr.runScript(
+                fn,
+                { world },
+                tab.targetId,
+                evalTimeoutMs ?? 15_000,
+              );
+              if (!scriptResult.ok) {
+                return jsonError(res, 502, scriptResult.error ?? "TabHR runScript failed");
+              }
+              return res.json({
+                ok: true,
+                targetId: tab.targetId,
+                url: tab.url,
+                result: scriptResult.result,
+              });
             }
             default:
               return jsonError(
                 res,
                 501,
-                `TabHR extension does not support act kind "${kind}". Supported: click (x,y), type, press, scrollIntoView.`,
+                `TabHR extension does not support act kind "${kind}". Supported: evaluate (runScript), click (x,y), type, press, scrollIntoView.`,
               );
           }
         }

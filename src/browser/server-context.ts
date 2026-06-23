@@ -31,7 +31,7 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
-import { createTabhrClient, isTabhrReachable, TABHR_TARGET_ID } from "./tabhr-client.js";
+import { createTabhrClient, isTabhrReachable } from "./tabhr-client.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -99,15 +99,13 @@ function createProfileContext(
   const listTabs = async (): Promise<BrowserTab[]> => {
     if (profile.driver === "extension") {
       const tabhr = createTabhrClient(profile.cdpUrl);
-      const data = await tabhr.status(5000);
-      return [
-        {
-          targetId: TABHR_TARGET_ID,
-          title: data.title ?? "",
-          url: data.url ?? "",
-          type: "page",
-        },
-      ];
+      const gw = await tabhr.gatewayStatus(5000);
+      return gw.connectionIds.map((connectionId) => ({
+        targetId: connectionId,
+        title: gw.connectionMetas[connectionId]?.title ?? "",
+        url: gw.connectionMetas[connectionId]?.url ?? "",
+        type: "page",
+      }));
     }
 
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
@@ -151,11 +149,12 @@ function createProfileContext(
     if (profile.driver === "extension") {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
       const tabhr = createTabhrClient(profile.cdpUrl);
-      const data = await tabhr.navigate(url, 8000);
       const profileState = getProfileState();
-      profileState.lastTargetId = TABHR_TARGET_ID;
+      const connectionId = profileState.lastTargetId?.trim() || (await tabhr.resolveConnectionId());
+      const data = await tabhr.navigate(url, connectionId, 8000);
+      profileState.lastTargetId = connectionId;
       return {
-        targetId: TABHR_TARGET_ID,
+        targetId: connectionId,
         title: data.title ?? "",
         url: data.url ?? url,
         type: "page",

@@ -1,7 +1,8 @@
 /**
- * TabHR browser extension API client (port 9220).
- * Uses JSON envelope format: { requestId, endpoint, ...params }; response: { success, data?, error?, requestId }.
- * Not CDP; no debugging mode.
+ * TabHR browser extension gateway client (port 9220).
+ * Uses extension-tab-gateway HTTP API:
+ *   GET  /status
+ *   POST /connection/:connectionId/command  { requestId, endpoint, ...params }
  */
 
 let requestIdCounter = 0;
@@ -11,139 +12,297 @@ function nextRequestId(): string {
   return `tabhr-${requestIdCounter}`;
 }
 
-export type TabhrEnvelopeRequest = {
-  requestId?: string | number;
-  endpoint: string;
-  [k: string]: unknown;
+export type TabhrConnectionMeta = {
+  url: string;
+  title: string;
 };
 
-export type TabhrEnvelopeResponse =
-  | { success: true; data: unknown; requestId?: string | number }
-  | { success: false; error: string; requestId?: string | number };
+export type TabhrGatewayStatus = {
+  running: boolean;
+  connections: number;
+  connectionIds: string[];
+  connectionMetas: Record<string, TabhrConnectionMeta>;
+};
+
+export type TabhrInteractiveElement = {
+  index: number;
+  tag: string;
+  type: string | null;
+  id: string | null;
+  name: string | null;
+  placeholder: string | null;
+  ariaLabel: string | null;
+  text: string | null;
+  href: string | null;
+  value: string | null;
+  disabled: boolean;
+  visible: boolean;
+  selectorHint: string;
+};
+
+export type TabhrExtractPageData = {
+  url: string;
+  title: string;
+  html: string;
+  htmlTruncated: boolean;
+  text: string;
+  textTruncated: boolean;
+  interactiveElements: TabhrInteractiveElement[];
+  metadata: {
+    forms: number;
+    links: number;
+    inputs: number;
+  };
+};
+
+export type TabhrRunScriptResult = {
+  ok: boolean;
+  result: unknown;
+  error: string | null;
+};
+
+type GatewayCommandResponse = { success: true; data: unknown } | { success: false; error: string };
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
-async function fetchTabhr(
-  baseUrl: string,
-  envelope: TabhrEnvelopeRequest,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<TabhrEnvelopeResponse> {
-  const requestId = envelope.requestId ?? nextRequestId();
-  const body = { ...envelope, requestId };
-  const url = baseUrl.replace(/\/$/, "");
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/$/, "");
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
   const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getGatewayStatus(
+  baseUrl: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<TabhrGatewayStatus> {
+  const url = `${normalizeBaseUrl(baseUrl)}/status`;
+  const res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
+  if (!res.ok) {
+    throw new Error(`TabHR HTTP ${res.status}`);
+  }
+  return (await res.json()) as TabhrGatewayStatus;
+}
+
+async function postConnectionCommand(
+  baseUrl: string,
+  connectionId: string,
+  endpoint: string,
+  params: Record<string, unknown>,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<unknown> {
+  const requestId = nextRequestId();
+  const url = `${normalizeBaseUrl(baseUrl)}/connection/${encodeURIComponent(connectionId)}/command`;
+  const res = await fetchWithTimeout(
+    url,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      throw new Error(`TabHR HTTP ${res.status}`);
+      body: JSON.stringify({ requestId, endpoint, ...params }),
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    throw new Error(`TabHR HTTP ${res.status}`);
+  }
+  const json = (await res.json()) as GatewayCommandResponse;
+  if (!json.success) {
+    throw new Error(json.error ?? "TabHR command failed");
+  }
+  return json.data;
+}
+
+export function createTabhrClient(baseUrl: string, preferredConnectionId?: string) {
+  let cachedConnectionId = preferredConnectionId?.trim() || "";
+
+  async function resolveConnectionId(explicit?: string): Promise<string> {
+    const id = explicit?.trim() || cachedConnectionId;
+    if (id) {
+      return id;
     }
-    const json = (await res.json()) as TabhrEnvelopeResponse;
-    return json;
-  } finally {
-    clearTimeout(t);
+    const status = await getGatewayStatus(baseUrl);
+    if (status.connectionIds.length === 0) {
+      throw new Error("No TabHR extension connections available");
+    }
+    cachedConnectionId = status.connectionIds[0] ?? "";
+    if (!cachedConnectionId) {
+      throw new Error("No TabHR extension connections available");
+    }
+    return cachedConnectionId;
   }
-}
 
-async function sendCommand<T = unknown>(
-  baseUrl: string,
-  endpoint: string,
-  params: Record<string, unknown> = {},
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<T> {
-  const resp = await fetchTabhr(baseUrl, { endpoint, ...params }, timeoutMs);
-  if (!resp.success) {
-    throw new Error(resp.error ?? "TabHR command failed");
+  async function command<T>(
+    endpoint: string,
+    params: Record<string, unknown> = {},
+    opts?: { connectionId?: string; timeoutMs?: number },
+  ): Promise<T> {
+    const connectionId = await resolveConnectionId(opts?.connectionId);
+    return (await postConnectionCommand(
+      baseUrl,
+      connectionId,
+      endpoint,
+      params,
+      opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    )) as T;
   }
-  return resp.data as T;
-}
 
-export type TabhrStatusData = { url?: string; title?: string };
-
-export function createTabhrClient(baseUrl: string) {
   return {
-    /** Check extension is reachable and get current page url/title. */
-    async status(timeoutMs?: number): Promise<TabhrStatusData> {
-      return sendCommand<TabhrStatusData>(baseUrl, "status", {}, timeoutMs);
+    /** Gateway status with all shared-tab connection IDs. */
+    async gatewayStatus(timeoutMs?: number): Promise<TabhrGatewayStatus> {
+      return await getGatewayStatus(baseUrl, timeoutMs ?? DEFAULT_TIMEOUT_MS);
     },
 
-    async navigate(url: string, timeoutMs?: number): Promise<TabhrStatusData> {
-      return sendCommand<TabhrStatusData>(baseUrl, "navigate", { url }, timeoutMs);
+    async resolveConnectionId(explicit?: string): Promise<string> {
+      return await resolveConnectionId(explicit);
     },
 
-    async back(timeoutMs?: number): Promise<TabhrStatusData> {
-      return sendCommand<TabhrStatusData>(baseUrl, "back", {}, timeoutMs);
+    /** Per-connection page url/title. */
+    async status(connectionId?: string, timeoutMs?: number): Promise<TabhrConnectionMeta> {
+      return await command<TabhrConnectionMeta>("status", {}, { connectionId, timeoutMs });
     },
 
-    async forward(timeoutMs?: number): Promise<TabhrStatusData> {
-      return sendCommand<TabhrStatusData>(baseUrl, "forward", {}, timeoutMs);
+    async extractPage(
+      opts?: {
+        maxHtmlChars?: number;
+        maxInteractiveElements?: number;
+        maxTextChars?: number;
+      },
+      connectionId?: string,
+      timeoutMs?: number,
+    ): Promise<TabhrExtractPageData> {
+      const data = await command<{ page: TabhrExtractPageData }>(
+        "extractPage",
+        {
+          maxHtmlChars: opts?.maxHtmlChars,
+          maxInteractiveElements: opts?.maxInteractiveElements,
+          maxTextChars: opts?.maxTextChars,
+        },
+        { connectionId, timeoutMs: timeoutMs ?? 15_000 },
+      );
+      if (!data?.page) {
+        throw new Error("TabHR extractPage returned no page data");
+      }
+      return data.page;
     },
 
-    async reload(timeoutMs?: number): Promise<TabhrStatusData> {
-      return sendCommand<TabhrStatusData>(baseUrl, "reload", {}, timeoutMs);
+    async runScript(
+      script: string,
+      opts?: { world?: "MAIN" | "ISOLATED" },
+      connectionId?: string,
+      timeoutMs?: number,
+    ): Promise<TabhrRunScriptResult> {
+      return await command<TabhrRunScriptResult>(
+        "runScript",
+        { script, world: opts?.world ?? "MAIN" },
+        { connectionId, timeoutMs: timeoutMs ?? 15_000 },
+      );
     },
 
-    async click(x = 0, y = 0, timeoutMs?: number): Promise<{ ack: boolean; command: string }> {
-      return sendCommand(baseUrl, "click", { x, y }, timeoutMs);
+    async navigate(
+      url: string,
+      connectionId?: string,
+      timeoutMs?: number,
+    ): Promise<TabhrConnectionMeta> {
+      return await command<TabhrConnectionMeta>("navigate", { url }, { connectionId, timeoutMs });
     },
 
-    async type(text: string, timeoutMs?: number): Promise<{ ack: boolean; command: string }> {
-      return sendCommand(baseUrl, "type", { text }, timeoutMs);
+    async back(connectionId?: string, timeoutMs?: number): Promise<TabhrConnectionMeta> {
+      return await command<TabhrConnectionMeta>("back", {}, { connectionId, timeoutMs });
     },
 
-    async keypress(key: string, timeoutMs?: number): Promise<{ ack: boolean; command: string }> {
-      return sendCommand(baseUrl, "keypress", { key }, timeoutMs);
+    async forward(connectionId?: string, timeoutMs?: number): Promise<TabhrConnectionMeta> {
+      return await command<TabhrConnectionMeta>("forward", {}, { connectionId, timeoutMs });
+    },
+
+    async reload(connectionId?: string, timeoutMs?: number): Promise<TabhrConnectionMeta> {
+      return await command<TabhrConnectionMeta>("reload", {}, { connectionId, timeoutMs });
+    },
+
+    async click(
+      x = 0,
+      y = 0,
+      connectionId?: string,
+      timeoutMs?: number,
+    ): Promise<{ ack: boolean; command: string }> {
+      return await command("click", { x, y }, { connectionId, timeoutMs });
+    },
+
+    async type(
+      text: string,
+      connectionId?: string,
+      timeoutMs?: number,
+    ): Promise<{ ack: boolean; command: string }> {
+      return await command("type", { text }, { connectionId, timeoutMs });
+    },
+
+    async keypress(
+      key: string,
+      connectionId?: string,
+      timeoutMs?: number,
+    ): Promise<{ ack: boolean; command: string }> {
+      return await command("keypress", { key }, { connectionId, timeoutMs });
     },
 
     async scroll(
       deltaX = 0,
       deltaY = 0,
+      connectionId?: string,
       timeoutMs?: number,
     ): Promise<{ ack: boolean; command: string }> {
-      return sendCommand(baseUrl, "scroll", { deltaX, deltaY }, timeoutMs);
+      return await command("scroll", { deltaX, deltaY }, { connectionId, timeoutMs });
     },
 
     async resize(
       width: number,
       height: number,
+      connectionId?: string,
       timeoutMs?: number,
     ): Promise<{ ack: boolean; command: string }> {
-      return sendCommand(baseUrl, "resize", { width, height }, timeoutMs);
+      return await command("resize", { width, height }, { connectionId, timeoutMs });
     },
 
     /** Returns { data: "data:image/jpeg;base64,..." } */
-    async screenshot(timeoutMs?: number): Promise<{ data: string }> {
-      return sendCommand<{ data: string }>(baseUrl, "screenshot", {}, timeoutMs);
+    async screenshot(connectionId?: string, timeoutMs?: number): Promise<{ data: string }> {
+      return await command<{ data: string }>("screenshot", {}, { connectionId, timeoutMs });
     },
 
-    /** Returns { result: <value> }. Use expression or script. */
+    /** Legacy alias for runScript with expression wrapping on the extension side. */
     async evaluate(
       expression: string,
-      opts?: { script?: string },
+      opts?: { script?: string; world?: "MAIN" | "ISOLATED" },
+      connectionId?: string,
       timeoutMs?: number,
-    ): Promise<{ result: unknown }> {
-      const params = opts?.script != null ? { script: opts.script } : { expression };
-      return sendCommand<{ result: unknown }>(baseUrl, "evaluate", params, timeoutMs);
+    ): Promise<TabhrRunScriptResult> {
+      const params =
+        opts?.script != null
+          ? { script: opts.script, world: opts?.world ?? "MAIN" }
+          : { expression, world: opts?.world ?? "MAIN" };
+      return await command<TabhrRunScriptResult>("evaluate", params, { connectionId, timeoutMs });
     },
   };
 }
 
 export type TabhrClient = ReturnType<typeof createTabhrClient>;
 
-/** Single logical tab id for TabHR (extension has one page). */
+/** @deprecated Use connection UUID from GET /status as targetId. */
 export const TABHR_TARGET_ID = "tabhr";
 
-/** Returns true if the TabHR extension at baseUrl responds to the status command. */
+/** Returns true if the TabHR gateway at baseUrl responds to GET /status. */
 export async function isTabhrReachable(baseUrl: string, timeoutMs = 2000): Promise<boolean> {
   try {
-    const client = createTabhrClient(baseUrl);
-    await client.status(timeoutMs);
-    return true;
+    const status = await getGatewayStatus(baseUrl, timeoutMs);
+    return status.running;
   } catch {
     return false;
   }
