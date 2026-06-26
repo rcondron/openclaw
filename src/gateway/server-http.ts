@@ -51,6 +51,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import { handleOpenAiAbortHttpRequest } from "./openai-http-abort.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
@@ -570,6 +571,16 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (openAiChatCompletionsEnabled) {
+        if (
+          await handleOpenAiAbortHttpRequest(req, res, {
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          })
+        ) {
+          return;
+        }
         if (
           await handleOpenAiHttpRequest(req, res, {
             auth: resolvedAuth,
