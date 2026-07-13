@@ -15,6 +15,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { redactSecrets } from "./redact-secrets.js";
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -81,7 +82,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: true };
   }
 
-  let text = normalized.text ?? "";
+  let text = redactSecrets(normalized.text ?? "");
+  if (normalized.text && text !== normalized.text) {
+    normalized = { ...normalized, text };
+  }
   let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
     ? (normalized.mediaUrls?.filter(Boolean) as string[])
     : normalized.mediaUrl
