@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -56,6 +56,22 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
     body: JSON.stringify(body),
   });
   return res;
+}
+
+async function postChatCompletionsAbort(
+  port: number,
+  body: unknown,
+  headers?: Record<string, string>,
+) {
+  return await fetch(`http://127.0.0.1:${port}/v1/chat/completions/abort`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer secret",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 function parseSseDataLines(text: string): string[] {
@@ -470,5 +486,124 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("aborts an in-flight streaming completion via /v1/chat/completions/abort", async () => {
+    const port = enabledPort;
+    let aborted = false;
+    agentCommand.mockReset();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const abortSignal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!abortSignal || abortSignal.aborted) {
+          aborted = Boolean(abortSignal?.aborted);
+          resolve();
+          return;
+        }
+        abortSignal.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return { payloads: [{ text: "never" }] } as never;
+    }) as never);
+
+    const completionRes = await postChatCompletions(port, {
+      stream: true,
+      user: "abort-test-user",
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(completionRes.status).toBe(200);
+
+    await vi.waitFor(
+      () => {
+        expect(agentCommand.mock.calls.length).toBeGreaterThan(0);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
+
+    const runId = (agentCommand.mock.calls[0]?.[0] as { runId?: string } | undefined)?.runId;
+    expect(runId).toMatch(/^chatcmpl_/);
+
+    const abortRes = await postChatCompletionsAbort(port, { run_id: runId });
+    expect(abortRes.status).toBe(200);
+    const abortJson = (await abortRes.json()) as { aborted?: boolean; run_ids?: string[] };
+    expect(abortJson.aborted).toBe(true);
+    expect(abortJson.run_ids).toEqual([runId]);
+
+    await vi.waitFor(
+      () => {
+        expect(aborted).toBe(true);
+      },
+      { timeout: 2_000, interval: 20 },
+    );
+
+    await completionRes.text();
+  });
+
+  it("aborts by user session key via /v1/chat/completions/abort", async () => {
+    const port = enabledPort;
+    let aborted = false;
+    agentCommand.mockReset();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const abortSignal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!abortSignal || abortSignal.aborted) {
+          aborted = Boolean(abortSignal?.aborted);
+          resolve();
+          return;
+        }
+        abortSignal.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return { payloads: [{ text: "never" }] } as never;
+    }) as never);
+
+    const completionRes = await postChatCompletions(port, {
+      stream: true,
+      user: "abort-by-user",
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(completionRes.status).toBe(200);
+
+    await vi.waitFor(
+      () => {
+        expect(agentCommand.mock.calls.length).toBeGreaterThan(0);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
+
+    const abortRes = await postChatCompletionsAbort(port, { user: "abort-by-user" });
+    expect(abortRes.status).toBe(200);
+    const abortJson = (await abortRes.json()) as { aborted?: boolean; run_ids?: string[] };
+    expect(abortJson.aborted).toBe(true);
+    expect(abortJson.run_ids?.length).toBeGreaterThan(0);
+
+    await vi.waitFor(
+      () => {
+        expect(aborted).toBe(true);
+      },
+      { timeout: 2_000, interval: 20 },
+    );
+
+    await completionRes.text();
+  });
+
+  it("returns 400 when abort request is missing run_id and user", async () => {
+    const res = await postChatCompletionsAbort(enabledPort, {});
+    expect(res.status).toBe(400);
+    await res.text();
   });
 });

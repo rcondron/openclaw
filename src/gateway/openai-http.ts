@@ -15,6 +15,12 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveOpenAiSessionIdForKey } from "./openai-http-abort.js";
+import {
+  abortOpenAiHttpRun,
+  registerOpenAiHttpRun,
+  unregisterOpenAiHttpRun,
+} from "./openai-http-runs.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -195,6 +201,18 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const abortController = new AbortController();
+  const sessionId = resolveOpenAiSessionIdForKey(sessionKey, agentId);
+  registerOpenAiHttpRun(runId, {
+    abortController,
+    sessionKey,
+    sessionId,
+    startedAtMs: Date.now(),
+  });
+
+  const cleanupRun = () => {
+    unregisterOpenAiHttpRun(runId);
+  };
 
   if (!stream) {
     try {
@@ -207,6 +225,7 @@ export async function handleOpenAiHttpRequest(
           deliver: false,
           messageChannel: "webchat",
           bestEffortDeliver: false,
+          abortSignal: abortController.signal,
         },
         defaultRuntime,
         deps,
@@ -239,10 +258,29 @@ export async function handleOpenAiHttpRequest(
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     } catch (err) {
+      if (abortController.signal.aborted) {
+        sendJson(res, 200, {
+          id: runId,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
+        return true;
+      }
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
       sendJson(res, 500, {
         error: { message: "internal error", type: "api_error" },
       });
+    } finally {
+      cleanupRun();
     }
     return true;
   }
@@ -309,6 +347,7 @@ export async function handleOpenAiHttpRequest(
   req.on("close", () => {
     closed = true;
     unsubscribe();
+    abortOpenAiHttpRun(runId);
   });
 
   void (async () => {
@@ -322,6 +361,7 @@ export async function handleOpenAiHttpRequest(
           deliver: false,
           messageChannel: "webchat",
           bestEffortDeliver: false,
+          abortSignal: abortController.signal,
         },
         defaultRuntime,
         deps,
@@ -361,6 +401,9 @@ export async function handleOpenAiHttpRequest(
         });
       }
     } catch (err) {
+      if (abortController.signal.aborted || closed) {
+        return;
+      }
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (closed) {
         return;
@@ -384,6 +427,7 @@ export async function handleOpenAiHttpRequest(
         data: { phase: "error" },
       });
     } finally {
+      cleanupRun();
       if (!closed) {
         closed = true;
         unsubscribe();
