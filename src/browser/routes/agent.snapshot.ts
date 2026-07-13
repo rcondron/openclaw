@@ -15,8 +15,8 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import { createTabhrClient } from "../tabhr-client.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { createTabhrClient } from "../tabhr-client.js";
 import {
   getPwAiModule,
   handleRouteError,
@@ -75,7 +75,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
           });
           const tabhr = createTabhrClient(cdpUrl);
-          const data = await tabhr.navigate(url, 8000);
+          const data = await tabhr.navigate(url, tab.targetId, 8000);
           return res.json({
             ok: true,
             targetId: tab.targetId,
@@ -145,10 +145,14 @@ export function registerBrowserAgentSnapshotRoutes(
         let buffer: Buffer;
         if (profileCtx.profile.driver === "extension") {
           if (fullPage || ref || element) {
-            return jsonError(res, 400, "TabHR screenshot does not support fullPage, ref, or element");
+            return jsonError(
+              res,
+              400,
+              "TabHR screenshot does not support fullPage, ref, or element",
+            );
           }
           const tabhr = createTabhrClient(cdpUrl);
-          const { data: dataUrl } = await tabhr.screenshot(8000);
+          const { data: dataUrl } = await tabhr.screenshot(tab.targetId, 8000);
           const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl ?? "");
           if (!match) {
             return jsonError(res, 502, "TabHR screenshot returned invalid data URL");
@@ -243,22 +247,32 @@ export function registerBrowserAgentSnapshotRoutes(
       }
       if (profileCtx.profile.driver === "extension") {
         const tabhr = createTabhrClient(profileCtx.profile.cdpUrl);
-        const statusData = await tabhr.status(5000);
-        const evalResult = await tabhr
-          .evaluate("document.body?.innerText ?? document.documentElement?.innerText ?? ''", {}, 5000)
-          .catch(() => ({ result: "" }));
-        const text = typeof evalResult.result === "string" ? evalResult.result : "";
-        const truncated =
-          typeof limit === "number" && limit > 0 && text.length > limit
-            ? text.slice(0, limit) + "\n..."
-            : text;
+        const maxHtmlChars =
+          typeof limit === "number" && limit > 0
+            ? limit
+            : typeof resolvedMaxChars === "number"
+              ? resolvedMaxChars
+              : undefined;
+        const page = await tabhr.extractPage(
+          {
+            maxHtmlChars,
+            maxTextChars: typeof resolvedMaxChars === "number" ? resolvedMaxChars : undefined,
+          },
+          tab.targetId,
+          15_000,
+        );
         return res.json({
           ok: true,
-          format: "aria",
+          format: "extract",
           targetId: tab.targetId,
-          url: statusData.url ?? tab.url,
-          title: statusData.title ?? "",
-          text: truncated,
+          url: page.url,
+          title: page.title,
+          html: page.html,
+          htmlTruncated: page.htmlTruncated,
+          text: page.text,
+          textTruncated: page.textTruncated,
+          interactiveElements: page.interactiveElements,
+          metadata: page.metadata,
           tree: [],
         });
       }

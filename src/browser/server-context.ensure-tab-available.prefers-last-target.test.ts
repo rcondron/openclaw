@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import * as tabhrClient from "./tabhr-client.js";
 import type { BrowserServerState } from "./server-context.js";
-import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
+import "./server-context.chrome-test-harness.js";
+import * as tabhrClient from "./tabhr-client.js";
 
 function makeBrowserState(): BrowserServerState {
   return {
@@ -134,9 +134,19 @@ describe("browser server-context ensureTabAvailable", () => {
   });
 
   it("falls back to the only attached tab when an invalid targetId is provided (extension)", async () => {
+    const connectionId = "550e8400-e29b-41d4-a716-446655440000";
     vi.spyOn(tabhrClient, "isTabhrReachable").mockResolvedValue(true);
     vi.spyOn(tabhrClient, "createTabhrClient").mockReturnValue({
-      status: vi.fn().mockResolvedValue({ url: "https://a.example", title: "t" }),
+      gatewayStatus: vi.fn().mockResolvedValue({
+        running: true,
+        connections: 1,
+        connectionIds: [connectionId],
+        connectionMetas: { [connectionId]: { url: "https://a.example", title: "t" } },
+      }),
+      resolveConnectionId: vi.fn().mockResolvedValue(connectionId),
+      status: vi.fn(),
+      extractPage: vi.fn(),
+      runScript: vi.fn(),
       navigate: vi.fn(),
       back: vi.fn(),
       forward: vi.fn(),
@@ -145,13 +155,15 @@ describe("browser server-context ensureTabAvailable", () => {
       resize: vi.fn(),
       screenshot: vi.fn(),
       evaluate: vi.fn(),
+      click: vi.fn(),
+      type: vi.fn(),
     } as ReturnType<typeof tabhrClient.createTabhrClient>);
 
     const state = makeExtensionChromeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
     const chosen = await chrome.ensureTabAvailable("NOT_A_TAB");
-    expect(chosen.targetId).toBe(tabhrClient.TABHR_TARGET_ID);
+    expect(chosen.targetId).toBe(connectionId);
   });
 
   it("fails when the tab list is empty and opening about:blank cannot complete", async () => {

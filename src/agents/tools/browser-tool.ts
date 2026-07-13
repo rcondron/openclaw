@@ -230,10 +230,10 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via the browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for TabHR browser extension (CDP on port 9220). Use profile="browserless" for the isolated OpenClaw-managed browser (legacy name: openclaw).',
-      'If the user mentions the TabHR extension or browser on port 9220, use profile="chrome".',
+      'Profiles: use profile="chrome" for TabHR browser extension (shared tab gateway on port 9220). Use profile="browserless" for remote Browserless.io (CDP/WebSocket via Playwright; legacy name: openclaw).',
+      'If the user mentions the TabHR extension, shared tab, or browser on port 9220, use profile="chrome" and read the tabhr-extension skill (DOM-first: snapshot/extractPage, then act evaluate/runScript).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "TabHR profile (chrome) connects to CDP at http://127.0.0.1:9220. Ensure the TabHR extension or browser is running on that port with at least one tab open.",
+      "TabHR profile (chrome) uses GET /status and POST /connection/:id/command at http://127.0.0.1:9220. targetId is the connection UUID from tabs/status — not a CDP target id.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",

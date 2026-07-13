@@ -33,6 +33,8 @@ function buildSkillsSection(params: {
     "Before replying: scan <available_skills> <description> entries.",
     "- For voice-related tasks (calls, voice chat, Twilio, Teams, Zoom, WhatsApp voice): use the voicechat skill.",
     "- For document, image, or PDF analysis (reading, summarizing, extracting data from attachments or files): use the mordiem-document-reader skill.",
+    '- For Browserless.io / remote managed browser tasks: use the browserless skill, then drive browsing with the `browser` tool and profile="browserless" (CDP/WebSocket — never BQL).',
+    '- For TabHR manager-shared Chrome tabs (extension on port 9220): use the tabhr-extension skill, then profile="chrome" with DOM-first extractPage + runScript (screenshot only as fallback).',
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
