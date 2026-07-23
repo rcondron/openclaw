@@ -88,6 +88,19 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    systemPromptPruning: z
+      .object({
+        enabled: z.boolean().optional(),
+        hydeModel: z.string().optional(),
+        judgeModel: z.string().optional(),
+        baseUrl: z.string().optional(),
+        minOptionalUnits: z.number().int().nonnegative().optional(),
+        maxOptionalTokens: z.number().int().positive().optional(),
+        historyTurns: z.number().int().nonnegative().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),

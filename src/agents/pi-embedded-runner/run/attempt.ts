@@ -35,6 +35,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { maybePruneSystemPromptWithHyde } from "../../context-pruning/apply-hyde-prune.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -614,6 +615,23 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      // HyDE system-prompt pruning (opt-in): drop the parts of the system prompt
+      // this turn's message does not need, before the model call. Fail-safe —
+      // returns null and leaves the full prompt in place on any problem.
+      const hydePrune = await maybePruneSystemPromptWithHyde({
+        systemPromptText,
+        messages: activeSession.messages,
+        config: params.config,
+        logger: (message) => log.info(message),
+      });
+      if (hydePrune?.changed) {
+        applySystemPromptOverrideToSession(activeSession, hydePrune.prunedPrompt);
+        const s = hydePrune.stats;
+        log.info(
+          `[hyde-prune] optional ${s.keptOptional}/${s.optionalUnits} kept · ` +
+            `~${s.estOriginalTokens}→${s.estPrunedTokens} tok · ${s.elapsedMs}ms · ${s.judgeModel}`,
+        );
+      }
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(

@@ -48,6 +48,32 @@ export type AgentContextPruningConfig = {
   };
 };
 
+/**
+ * HyDE-based system-prompt relevance pruning. Scores the system prompt against
+ * each incoming message and drops the parts the agent does not need for that
+ * turn, reducing per-message context tokens. Served by Mordiem (requires
+ * MORDIEM_API_KEY). Off by default; can also be toggled via the
+ * OPENCLAW_HYDE_PRUNE env flag.
+ */
+export type SystemPromptPruningConfig = {
+  /** Enable HyDE system-prompt pruning. */
+  enabled?: boolean;
+  /** Mordiem model id used for HyDE generation (default: zai-org-glm-5-2). */
+  hydeModel?: string;
+  /** Mordiem model id used for the relevance judge (default: same as hydeModel). */
+  judgeModel?: string;
+  /** OpenAI-compatible base URL override (default: https://api.mordiem.com/api/v1). */
+  baseUrl?: string;
+  /** Skip pruning when there are fewer OPTIONAL units than this (default: 8). */
+  minOptionalUnits?: number;
+  /** Token budget for kept OPTIONAL units; CORE is always kept (default: 1200). */
+  maxOptionalTokens?: number;
+  /** Recent conversation turns folded into the HyDE/judge context (default: 6). */
+  historyTurns?: number;
+  /** Per-request network timeout in ms (default: 30000). */
+  timeoutMs?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -160,6 +186,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Opt-in: HyDE-based system-prompt relevance pruning (per-message context reduction). */
+  systemPromptPruning?: SystemPromptPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
