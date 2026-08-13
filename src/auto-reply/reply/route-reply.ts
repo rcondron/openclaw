@@ -75,7 +75,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     : cfg.messages?.responsePrefix === "auto"
       ? undefined
       : cfg.messages?.responsePrefix;
-  const normalized = normalizeReplyPayload(payload, {
+  let normalized = normalizeReplyPayload(payload, {
     responsePrefix,
   });
   if (!normalized) {

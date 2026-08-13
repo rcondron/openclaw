@@ -13,7 +13,7 @@ const REDACTED = "[REDACTED]";
 // ── Pattern definitions ──────────────────────────────────────────────
 // Each entry: [regex, replacement]. Regexes use 'gi' flags.
 
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
+const SECRET_PATTERNS: Array<[RegExp, string | ((match: string, ...args: string[]) => string)]> = [
   // ── API Keys & Tokens (common prefixes) ──
   // OpenAI
   [/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, REDACTED],
