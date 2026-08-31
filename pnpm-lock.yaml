@@ -65,6 +65,9 @@ importers:
       '@mariozechner/pi-tui':
         specifier: 0.54.0
         version: 0.54.0
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(zod@4.3.6)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
