@@ -1,0 +1,39 @@
+{
+  "id": "mcp",
+  "name": "MCP Client",
+  "description": "Connects agents to Model Context Protocol servers over stdio, Streamable HTTP, or SSE.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "servers": {
+        "type": "object",
+        "description": "Map of server name to server definition. Mirrors upstream OpenClaw's mcp.servers shape.",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "command": { "type": "string" },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } },
+            "cwd": { "type": "string" },
+            "url": { "type": "string" },
+            "transport": { "type": "string", "enum": ["stdio", "streamable-http", "sse"] },
+            "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+            "connectionTimeoutMs": { "type": "number" },
+            "requestTimeoutMs": { "type": "number" },
+            "toolFilter": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "include": { "type": "array", "items": { "type": "string" } },
+                "exclude": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
