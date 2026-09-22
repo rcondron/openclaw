@@ -20,7 +20,10 @@ import {
   browserTabs,
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
-import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import {
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_BROWSERLESS_PROFILE_NAME,
+} from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
@@ -218,6 +221,27 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+/**
+ * Which browser profile a call actually gets.
+ *
+ * An agent with a session of its own keeps it even when the call names the
+ * shared profile: skills and older instructions say profile="browserless" by
+ * rote, and honouring that would put every agent back in one cookie jar. Any
+ * other named profile is still honoured, and agents without one of their own
+ * are unaffected.
+ */
+export function chooseBrowserProfile(
+  requested: string | undefined,
+  agentProfile: string | undefined,
+): string | undefined {
+  if (!agentProfile) {
+    return requested;
+  }
+  const asksForShared =
+    !requested || requested === DEFAULT_BROWSERLESS_PROFILE_NAME || requested === "openclaw";
+  return asksForShared ? agentProfile : requested;
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -232,7 +256,9 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via the browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for TabHR browser extension (shared tab gateway on port 9220). Use profile="browserless" for remote Browserless.io (CDP/WebSocket via Playwright; legacy name: openclaw).',
+      opts?.defaultProfile
+        ? `Profiles: you have a browser session of your own and it is used by default, so do not name a profile unless you need a different browser. Use profile="chrome" for the TabHR browser extension (shared tab gateway on port 9220).`
+        : 'Profiles: use profile="chrome" for TabHR browser extension (shared tab gateway on port 9220). Use profile="browserless" for remote Browserless.io (CDP/WebSocket via Playwright; legacy name: openclaw).',
       'If the user mentions the TabHR extension, shared tab, or browser on port 9220, use profile="chrome" and read the tabhr-extension skill (DOM-first: snapshot/extractPage, then act evaluate/runScript).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "TabHR profile (chrome) uses GET /status and POST /connection/:id/command at http://127.0.0.1:9220. targetId is the connection UUID from tabs/status — not a CDP target id.",
@@ -246,7 +272,10 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile") ?? opts?.defaultProfile;
+      const profile = chooseBrowserProfile(
+        readStringParam(params, "profile"),
+        opts?.defaultProfile,
+      );
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
