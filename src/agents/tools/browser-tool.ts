@@ -829,6 +829,9 @@ export function createBrowserTool(opts?: {
           }
 
           const wsUrl = resolveFastTaskCdpUrl(profile ?? opts?.defaultProfile);
+          console.log(
+            `[fast-task] action=task requested (profile=${profile ?? opts?.defaultProfile ?? "default"}, attach=${wsUrl ?? "none"})`,
+          );
           if (!wsUrl) {
             return jsonResult({
               done: false,

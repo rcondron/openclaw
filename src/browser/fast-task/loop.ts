@@ -68,15 +68,16 @@ export async function runFastBrowserTask(opts: {
   let consecutiveFailures = 0;
   const MAX_CONSECUTIVE_FAILURES = 3;
 
-  const finish = (outcome: Outcome, reason: string): LoopResult => ({
-    outcome,
-    reason,
-    steps,
-    finalUrl,
-    totalMs: Date.now() - startedAt,
-  });
+  const finish = (outcome: Outcome, reason: string): LoopResult => {
+    log(
+      `${outcome} after ${steps.length} step(s) in ${Date.now() - startedAt}ms — ${reason}` +
+        (finalUrl ? ` (${finalUrl})` : "")
+    );
+    return { outcome, reason, steps, finalUrl, totalMs: Date.now() - startedAt };
+  };
 
   try {
+    log(`start — goal="${opts.goal}"${opts.startUrl ? ` from ${opts.startUrl}` : ""}`);
     session = await BrowserSession.open(opts.cdpUrl);
     if (opts.startUrl) {
       await session.navigate(opts.startUrl);
@@ -95,6 +96,12 @@ export async function runFastBrowserTask(opts: {
         allowed,
         apiKey: opts.veniceApiKey,
       });
+
+      log(
+        `step ${n}: ${decision.operation}` +
+          (decision.target !== null ? ` -> [${decision.target}]` : "") +
+          ` (decide ${decision.ms}ms, confidence ${decision.operationConfidence.toFixed(2)})`
+      );
 
       if (decision.operation === "DONE") {
         steps.push(step(n, decision, null, "reported the goal complete", stepStarted));
@@ -289,3 +296,10 @@ function step(
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Plain console, on purpose: these lines are how anyone tells whether a web task
+ * went down the fast path at all. A run that leaves no trace is indistinguishable
+ * from one that never happened, which cost real time to work out once already.
+ */
+const log = (message: string) => console.log(`[fast-task] ${message}`);
