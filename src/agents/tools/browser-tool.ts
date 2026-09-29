@@ -19,7 +19,8 @@ import {
   browserStop,
   browserTabs,
 } from "../../browser/client.js";
-import { resolveBrowserConfig } from "../../browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
+import { runFastBrowserTask } from "../../browser/fast-task/loop.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
@@ -218,9 +219,34 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+/**
+ * The CDP address the fast loop should attach to, as a WebSocket.
+ *
+ * It uses the same profile every other browser action in this call would, so
+ * the loop and the agent are always driving one browser. Returns null rather
+ * than throwing: a missing profile means "do it the slow way", not "fail".
+ */
+function resolveFastTaskCdpUrl(profileName?: string): string | null {
+  try {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const name = profileName ?? resolved.defaultProfile;
+    const profile = name ? resolveProfile(resolved, name) : null;
+    // resolveProfile already turns a port-only profile into a full address, so
+    // there is nothing left to fall back to if it found none.
+    const httpUrl = profile?.cdpUrl;
+    if (!httpUrl) return null;
+    return httpUrl.replace(/^http/, "ws");
+  } catch {
+    return null;
+  }
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
+  /** Used when a call names no profile, so each agent lands in its own browser session. */
+  defaultProfile?: string;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -229,7 +255,10 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     description: [
-      "Control the browser via the browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
+      'START HERE for any web task: action="task" with goal="<the whole job in one sentence>" (and startUrl if you know where to begin). It reads the page as a list of controls and decides each step in about half a second, so it finishes in seconds what costs minutes step by step. It drives the same browser as every other action here, so whatever it leaves on screen is where you continue.',
+      'The reply says what to do next: done=true means the task is finished — stop, do not redo it to check. fallback=true means it stopped early; read reason and steps, then finish the job yourself with snapshot/act FROM WHERE IT LEFT OFF, not from the beginning.',
+      'Do not use action="task" for a step that cannot be taken back (sending a message, submitting a payment, accepting terms) — do those yourself, one action at a time.',
+      "Everything else: control the browser step by step via the browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       'Profiles: use profile="chrome" for TabHR browser extension (shared tab gateway on port 9220). Use profile="browserless" for remote Browserless.io (CDP/WebSocket via Playwright; legacy name: openclaw).',
       'If the user mentions the TabHR extension, shared tab, or browser on port 9220, use profile="chrome" and read the tabhr-extension skill (DOM-first: snapshot/extractPage, then act evaluate/runScript).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
@@ -244,7 +273,7 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      const profile = readStringParam(params, "profile") ?? opts?.defaultProfile;
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
@@ -777,6 +806,58 @@ export function createBrowserTool(opts?: {
             }),
           );
         }
+        case "task": {
+          const goal = readStringParam(params, "goal", { required: true })!;
+          const startUrl = readStringParam(params, "startUrl") ?? undefined;
+          if (startUrl && !/^https?:\/\//i.test(startUrl)) {
+            throw new Error("startUrl must be http(s)");
+          }
+          const rawMaxSteps = params.maxSteps;
+          const maxSteps =
+            typeof rawMaxSteps === "number" ? Math.min(Math.max(rawMaxSteps, 1), 60) : undefined;
+
+          const veniceApiKey = process.env.VENICE_API_KEY?.trim();
+          const mordiemApiKey = process.env.MORDIEM_API_KEY?.trim();
+          if (!veniceApiKey || !mordiemApiKey) {
+            // Not an error: the caller's job is to carry on the slow way.
+            return jsonResult({
+              done: false,
+              fallback: true,
+              reason:
+                "The fast loop needs VENICE_API_KEY and MORDIEM_API_KEY in this container. Do the task with snapshot/act instead.",
+            });
+          }
+
+          const wsUrl = resolveFastTaskCdpUrl(profile ?? opts?.defaultProfile);
+          if (!wsUrl) {
+            return jsonResult({
+              done: false,
+              fallback: true,
+              reason:
+                "No browser profile with a CDP address, so the fast loop cannot attach. Do the task with snapshot/act instead.",
+            });
+          }
+
+          const result = await runFastBrowserTask({
+            cdpUrl: wsUrl,
+            goal,
+            startUrl,
+            veniceApiKey,
+            mordiemApiKey,
+            maxSteps,
+          });
+
+          return jsonResult({
+            done: result.outcome === "done",
+            fallback: result.outcome !== "done",
+            outcome: result.outcome,
+            reason: result.reason,
+            finalUrl: result.finalUrl,
+            totalMs: result.totalMs,
+            steps: result.steps,
+          });
+        }
+
         case "act": {
           const request = params.request as Record<string, unknown> | undefined;
           if (!request || typeof request !== "object") {

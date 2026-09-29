@@ -16,6 +16,9 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 const BROWSER_TOOL_ACTIONS = [
+  // First in the list because it is the first thing to try: one call that does
+  // a whole web task, falling back to the step-by-step actions below.
+  "task",
   "status",
   "start",
   "stop",
@@ -109,4 +112,10 @@ export const BrowserToolSchema = Type.Object({
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
   request: Type.Optional(BrowserActSchema),
+  /** action="task": the whole job in one sentence, e.g. "find flights from Zurich to London on 4 October". */
+  goal: Type.Optional(Type.String()),
+  /** action="task": page to start on. Omit to work with whatever is already open. */
+  startUrl: Type.Optional(Type.String()),
+  /** action="task": give up after this many steps (default 25). */
+  maxSteps: Type.Optional(Type.Number()),
 });
