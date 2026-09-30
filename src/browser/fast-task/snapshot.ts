@@ -1,154 +1,186 @@
-/**
- * What the page looks like, as a numbered list.
- *
- * The fast loop never looks at a screenshot. It reads the controls a person
- * could actually use — visible, on screen, not covered — numbers them, and
- * hands that list to the decision model. The model answers with one of those
- * numbers, so it can never name an element that was not offered to it.
- *
- * The whole read happens in one call inside the page, so every control in a
- * snapshot is measured against the same layout. Reading them one at a time
- * would let the page move underneath the read.
- */
-
-export interface Control {
-  /** Position in this snapshot. Only ever meaningful within one snapshot. */
-  i: number;
-  tag: string;
-  role: string;
-  name: string;
-  value: string;
-  /** Centre point, in viewport coordinates, for a real mouse event. */
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  /** Cheap identity check, so a stale index can be spotted before it is used. */
-  sig: string;
-}
-
-export interface PageSnapshot {
-  url: string;
-  title: string;
-  controls: Control[];
-  /** Page text, trimmed: enough for the model to know where it is. */
-  text: string;
-  scrollY: number;
-  scrollHeight: number;
-  viewportHeight: number;
-}
+import { createHash } from "node:crypto";
 
 /**
- * Runs in the page. Returns JSON, because CDP hands back a string far more
- * cheaply than it serialises a deep object.
+ * Reading the page, copied from browser-use/jev-ultrafast (MIT, © 2026 Browser
+ * Use): `jev_ultrafast/snapshot.js`, byte for byte.
+ *
+ * The part that matters is the identity cache. `window.__jevFast.nodes` maps an
+ * id to the actual DOM element, so an id keeps meaning the same element however
+ * the page renumbers, reflows or reloads around it. Elements are also numbered
+ * for the model, but a number is only ever a label on an entry in that map — it
+ * is never how an element is found again.
+ *
+ * It returns two things used to tell whether a decision still applies: a
+ * `marker` for the page as a whole, and a `guard` per element. Geometry is not
+ * among them; coordinates are resolved and hit-tested immediately before input.
+ *
+ * String.raw keeps the JS exactly as written — every backslash in it belongs to
+ * a regex, not to this file.
  */
-export const SNAPSHOT_JS = `(() => {
-  const MAX_CONTROLS = 120;
-  const MAX_TEXT = 2000;
-  const vw = window.innerWidth, vh = window.innerHeight;
-
-  const isInteractive = (el) => {
-    const tag = el.tagName.toLowerCase();
-    if (["a","button","input","textarea","select","summary","option"].includes(tag)) return true;
-    if (el.isContentEditable) return true;
-    const role = el.getAttribute("role");
-    if (role && ["button","link","textbox","checkbox","radio","combobox","menuitem","tab","option","switch","searchbox"].includes(role)) return true;
-    if (el.hasAttribute("onclick")) return true;
-    if (el.tabIndex >= 0 && tag !== "body") return true;
-    return false;
+export const SNAPSHOT_JS = String.raw`(() => {
+  if (!document.body) return null;
+  const cache = window.__jevFast ||= {ids:new WeakMap(), nodes:new Map(), next:1};
+  const identity = e => {
+    if (!cache.ids.has(e)) cache.ids.set(e,cache.next++);
+    const id=cache.ids.get(e); cache.nodes.set(id,e); return id;
   };
-
-  const nameOf = (el) => {
-    const pick = (s) => (s || "").replace(/\\s+/g, " ").trim().slice(0, 100);
-    return pick(
-      el.getAttribute("aria-label") ||
-      el.getAttribute("placeholder") ||
-      el.getAttribute("title") ||
-      el.getAttribute("alt") ||
-      (el.labels && el.labels[0] && el.labels[0].textContent) ||
-      el.textContent ||
-      el.getAttribute("name") ||
-      el.id
-    );
+  for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);
+  const safe = e => !['password','file','hidden'].includes(e.type);
+  const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
+    e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+  const name = (e,seen=new Set()) => {
+    if (!e || seen.has(e)) return '';
+    seen.add(e);
+    const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
+      .map(id=>name(document.getElementById(id),seen)).filter(Boolean).join(' ');
+    return referenced || e.getAttribute('aria-label') ||
+      [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
+      (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
+      (e.tagName==='INPUT' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
+        n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
+      e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
-
-  const out = [];
-  const seen = new Set();
-  for (const el of document.querySelectorAll("*")) {
-    if (out.length >= MAX_CONTROLS) break;
-    if (!isInteractive(el)) continue;
-
-    const r = el.getBoundingClientRect();
-    if (r.width < 4 || r.height < 4) continue;
-    // Off screen: the model can only act on what is actually reachable now.
-    if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) continue;
-
-    const style = getComputedStyle(el);
-    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
-    if (el.disabled) continue;
-
-    const x = Math.round(Math.min(Math.max(r.left + r.width / 2, 1), vw - 1));
-    const y = Math.round(Math.min(Math.max(r.top + r.height / 2, 1), vh - 1));
-
-    // Covered by something else (a dialog, a sticky bar): clicking would hit
-    // the wrong thing, so it is not offered at all.
-    const top = document.elementFromPoint(x, y);
-    if (top && top !== el && !el.contains(top) && !top.contains(el)) continue;
-
-    const tag = el.tagName.toLowerCase();
-    const name = nameOf(el);
-    const value = String(el.value ?? "").slice(0, 100);
-    const key = tag + "|" + name + "|" + Math.round(r.top) + "|" + Math.round(r.left);
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    out.push({
-      i: out.length,
-      tag,
-      role: el.getAttribute("role") || (el.type ? tag + ":" + el.type : tag),
-      name,
-      value,
-      x, y,
-      w: Math.round(r.width),
-      h: Math.round(r.height),
-      sig: tag + "|" + name.slice(0, 40) + "|" + Math.round(r.width) + "x" + Math.round(r.height),
-    });
+  const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
+    'option','gridcell','combobox','textbox','searchbox','spinbutton'];
+  const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],'+
+    roles.map(role=>'[role="'+role+'"]').join(',');
+  const role = e => {
+    const explicit=e.getAttribute('role');
+    if (roles.includes(explicit)) return explicit;
+    if (e.tagName==='BUTTON' || e.tagName==='SUMMARY') return 'button';
+    if (e.tagName==='A') return 'link';
+    if (e.tagName==='SELECT') return 'combobox';
+    if (e.tagName==='TEXTAREA' || e.isContentEditable) return 'textbox';
+    if (e.tagName==='INPUT') {
+      if (['checkbox','radio'].includes(e.type)) return e.type;
+      if (['button','submit','reset','image'].includes(e.type)) return 'button';
+      if (e.type==='search') return 'searchbox';
+      if (e.type==='number') return 'spinbutton';
+      if (['text','email','url','tel'].includes(e.type)) return 'textbox';
+    }
+    return null;
+  };
+  cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
+    [...document.querySelectorAll('input,textarea,select')].filter(safe)
+      .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
+  cache.guard=e=>{
+    if (!e?.isConnected || !visible(e)) return null;
+    const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
+    return [identity(e),role(e),name(e),e.value??null,e.checked??null,e.selectedIndex??null,
+      e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
+      e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
+      e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
+  };
+  const actions=[];
+  for (const e of document.querySelectorAll(selector)) {
+    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
+    if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
+    if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
+    const base={node:identity(e),role:rname,label:name(e)||rname,
+      rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+    for (const key of ['checked','selected','expanded']) {
+      const value=e.getAttribute('aria-'+key);
+      if (value!==null) base[key]=value;
+    }
+    if (['checkbox','radio'].includes(e.type)) base.checked=String(e.checked);
+    if (e.tagName==='SELECT') {
+      for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))
+        actions.push({...base,kind:'select',value:o.value,
+          current_value:[...e.selectedOptions].map(o=>o.label).join(', '),label:base.label+' → '+o.label});
+    } else {
+      const editable=!e.readOnly && e.getAttribute('aria-readonly')!=='true' &&
+        (['textbox','searchbox','spinbutton'].includes(rname) ||
+          (rname==='combobox' && ['INPUT','TEXTAREA'].includes(e.tagName)));
+      const value='value' in e ? String(e.value) :
+        e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
+      actions.push({...base,kind:editable?'fill':'click',value});
+      if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
+    }
   }
-
-  return JSON.stringify({
-    url: location.href,
-    title: document.title,
-    controls: out,
-    text: (document.body ? document.body.innerText : "").replace(/\\n{3,}/g, "\\n\\n").slice(0, MAX_TEXT),
-    scrollY: Math.round(window.scrollY),
-    scrollHeight: Math.round(document.documentElement.scrollHeight),
-    viewportHeight: vh,
-  });
+  const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+  const range=document.createRange(); let node,length=0;
+  while ((node=walker.nextNode()) && length<6000) {
+    const value=node.textContent.trim(), parent=node.parentElement;
+    if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
+    range.selectNodeContents(node); const r=range.getBoundingClientRect();
+    if (r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth) {
+      words.push(value); length+=value.length;
+    }
+  }
+  const text=words.join('\n').slice(0,6000), height=document.documentElement.scrollHeight;
+  const page_key=cache.pageKey(), guards={};
+  for (const a of actions) if (!(a.node in guards)) guards[a.node]=cache.guard(cache.nodes.get(a.node));
+  // Compare meaning and identity. Geometry is always resolved and hit-tested just before input.
+  const semantics=actions.map(({rect,...action})=>action);
+  const marker=[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
+    document.title,text,semantics,page_key[6]];
+  const omitted_actions=Math.max(0,actions.length-250);
+  actions.splice(250);
+  actions.forEach((a,i)=>a.id='e'+(i+1));
+  if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
+  if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
+  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
+    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
 })()`;
 
-/** The snapshot as the decision model sees it: a numbered table, nothing else. */
-export function renderState(snap: PageSnapshot, goal: string, history: string[]): string {
-  const lines = snap.controls.map(
-    (c) => `[${c.i}] ${c.role} "${c.name}"${c.value ? ` value="${c.value}"` : ""}`
-  );
-  const scrolled =
-    snap.scrollHeight > snap.viewportHeight
-      ? `Scrolled ${snap.scrollY} of ${snap.scrollHeight - snap.viewportHeight} px.`
-      : "Whole page fits on screen.";
-  return [
-    `GOAL: ${goal}`,
-    "",
-    `PAGE: ${snap.title}`,
-    `URL: ${snap.url}`,
-    scrolled,
-    "",
-    "WHAT HAS HAPPENED SO FAR:",
-    history.length ? history.map((h, n) => `${n + 1}. ${h}`).join("\n") : "Nothing yet.",
-    "",
-    "CONTROLS ON SCREEN:",
-    lines.length ? lines.join("\n") : "None.",
-    "",
-    "PAGE TEXT:",
-    snap.text,
-  ].join("\n");
+/** Just the page-wide marker, for the cheap freshness check. */
+export const MARKER_JS = `(() => { const state=${SNAPSHOT_JS}; return state?.marker ?? null; })()`;
+
+export interface SnapshotAction {
+  id: string;
+  kind: "click" | "fill" | "select" | "scroll" | "wait";
+  label: string;
+  node?: number;
+  role?: string;
+  value?: string;
+  current_value?: string;
+  checked?: string;
+  selected?: string;
+  expanded?: string;
+  delta?: number;
+  rect?: { x: number; y: number; w: number; h: number };
+}
+
+export interface PageState {
+  url: string;
+  title: string;
+  w: number;
+  h: number;
+  text: string;
+  scroll: { y: number; height: number };
+  actions: SnapshotAction[];
+  marker: unknown;
+  page_key: unknown[];
+  guards: Record<string, unknown>;
+  omitted_actions: number;
+  fingerprint: string;
+}
+
+/**
+ * Identifies an observed page for the "did this decision come from this page"
+ * check. Mirrors `fingerprint()` in the original's browser.py: the same four
+ * fields, hashed the same way, with keys sorted so the digest is stable.
+ */
+export function fingerprint(state: PageState): string {
+  const content = {
+    actions: state.actions,
+    scroll: state.scroll,
+    text: state.text,
+    url: state.url,
+  };
+  return createHash("sha256").update(stableJson(content)).digest("hex");
+}
+
+/** JSON with object keys sorted, matching Python's `json.dumps(sort_keys=True)`. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(", ")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}: ${stableJson(v)}`).join(", ")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }

@@ -1,39 +1,35 @@
 /**
- * The fast browser loop.
+ * The loop, ported from browser-use/jev-ultrafast (MIT, © 2026 Browser Use):
+ * `jev_ultrafast/agent.py`.
  *
- * Look at the page as a numbered list, ask one question, do one thing, repeat.
- * No screenshots, one decision call per step, and a writing model only when
- * something actually has to be typed.
+ * Observe the page, ask once what to do and to what, do that one thing, observe
+ * again. Their tick/predict/act steps are one function here because nothing in
+ * this setting drives the loop from outside.
  *
- * It is deliberately narrow. When it cannot see a way forward it stops and says
- * so, and the caller falls back to the employee's ordinary browser tool, which
- * is slower but can reason its way around the unexpected. Being quick is only
- * worth having if giving up is cheap.
+ * Their stopping rules are kept as they are, and they matter more than they
+ * look: a decision is consumed before anything is executed so a retry cannot
+ * click twice, freshness is rechecked after text generation because writing
+ * takes long enough for the page to move, and three consecutive actions that
+ * change nothing end the run instead of grinding through the step budget.
  */
-import { SNAPSHOT_JS, renderState, type Control, type PageSnapshot } from "./snapshot.js";
-import { decide, type Operation } from "./jev.js";
-import { writeFieldText } from "./text.js";
-import { BrowserSession } from "./cdp.js";
+import { Browser, StalePage } from "./browser.js";
+import { choose, fieldContext, fieldText, ModelError, type HistoryEntry } from "./model.js";
+import { MAX_STEPS } from "./questions.js";
+import type { PageState, SnapshotAction } from "./snapshot.js";
 
-const MAX_STEPS = () => Number(process.env.FAST_BROWSER_MAX_STEPS || 25);
-/** A dropdown needs longer to paint than a keystroke does. */
-const SETTLE_AFTER_CLICK_MS = 200;
-const SETTLE_AFTER_TYPE_MS = 50;
-const WAIT_MS = 1_000;
-/** Below this the model is guessing, and a guess is worth less than a handover. */
-const MIN_CONFIDENCE = () => Number(process.env.FAST_BROWSER_MIN_CONFIDENCE || 0.35);
-
-export type Outcome = "done" | "blocked" | "exhausted" | "error";
+export type Outcome = "done" | "blocked" | "error";
 
 export interface Step {
-  n: number;
-  operation: Operation;
-  target: string | null;
-  text?: string;
-  note: string;
+  step: number;
+  action: string;
+  kind: string;
+  operation: string;
+  text: string | null;
+  confidence: number;
   decisionMs: number;
-  textMs?: number;
-  totalMs: number;
+  textMs: number;
+  pageChanged: boolean | null;
+  url: string;
 }
 
 export interface LoopResult {
@@ -44,262 +40,154 @@ export interface LoopResult {
   totalMs: number;
 }
 
+const log = (message: string) => console.log(`[fast-task] ${message}`);
+
 export async function runFastBrowserTask(opts: {
   cdpUrl: string;
   goal: string;
   startUrl?: string;
   veniceApiKey: string;
-  mordiemApiKey: string;
+  textApiKey: string;
   maxSteps?: number;
 }): Promise<LoopResult> {
   const startedAt = Date.now();
+  const limit = Math.min(opts.maxSteps ?? MAX_STEPS, MAX_STEPS);
   const steps: Step[] = [];
-  const history: string[] = [];
-  const limit = opts.maxSteps ?? MAX_STEPS();
-
-  let session: BrowserSession | null = null;
+  const history: HistoryEntry[] = [];
+  let browser: Browser | null = null;
   let finalUrl = "";
-  /**
-   * A step can fail because the page moved, not because the task is impossible:
-   * a click dispatched as a navigation begins is never acknowledged. One of
-   * those is noise. Three in a row means the loop is not in control of this
-   * page and should hand over.
-   */
-  let consecutiveFailures = 0;
-  const MAX_CONSECUTIVE_FAILURES = 3;
 
   const finish = (outcome: Outcome, reason: string): LoopResult => {
     log(
       `${outcome} after ${steps.length} step(s) in ${Date.now() - startedAt}ms — ${reason}` +
-        (finalUrl ? ` (${finalUrl})` : "")
+        (finalUrl ? ` (${finalUrl})` : ""),
     );
     return { outcome, reason, steps, finalUrl, totalMs: Date.now() - startedAt };
   };
 
   try {
     log(`start — goal="${opts.goal}"${opts.startUrl ? ` from ${opts.startUrl}` : ""}`);
-    session = await BrowserSession.open(opts.cdpUrl);
-    if (opts.startUrl) {
-      await session.navigate(opts.startUrl);
-      await sleep(1_500);
-    }
+    browser = await Browser.open(opts.cdpUrl, opts.startUrl);
+    let page: PageState = await browser.observe();
+    finalUrl = page.url;
 
-    for (let n = 1; n <= limit; n++) {
-      const stepStarted = Date.now();
-      const snap = await readPage(session);
-      finalUrl = snap.url;
+    // Survives a stale retry, so an interrupted decision does not pay for the
+    // text again with the same context.
+    let pendingText: null | { key: string; text: string; model: string; ms: number } = null;
 
-      const allowed = allowedOperations(snap);
-      const decision = await decide({
-        state: renderState(snap, opts.goal, history),
-        controls: snap.controls,
-        allowed,
-        apiKey: opts.veniceApiKey,
-      });
+    while (true) {
+      if (history.length >= limit) {
+        return finish("blocked", `stopped at the ${limit}-action budget`);
+      }
+
+      if (!(await browser.fresh(page))) {
+        page = await browser.observe();
+        finalUrl = page.url;
+      }
+
+      let decision;
+      try {
+        decision = await choose(page, opts.goal, history, opts.veniceApiKey);
+      } catch (err) {
+        if (err instanceof StalePage) {
+          page = await browser.observe();
+          continue;
+        }
+        throw err;
+      }
 
       log(
-        `step ${n}: ${decision.operation}` +
-          (decision.target !== null ? ` -> [${decision.target}]` : "") +
-          ` (decide ${decision.ms}ms, confidence ${decision.operationConfidence.toFixed(2)})`
+        `step ${history.length + 1}: ${decision.operation}` +
+          (decision.target ? ` -> [${decision.target}]` : "") +
+          ` (decide ${decision.latencyMs}ms, confidence ${decision.confidence.toFixed(2)})`,
       );
 
-      if (decision.operation === "DONE") {
-        steps.push(step(n, decision, null, "reported the goal complete", stepStarted));
-        return finish("done", "the loop reported the goal complete");
-      }
-      if (decision.operation === "BLOCKED") {
-        steps.push(step(n, decision, null, "reported it cannot proceed", stepStarted));
-        return finish("blocked", "the loop cannot proceed on this page");
-      }
-
-      // A page-level operation needs no control; everything else does.
-      const needsTarget = decision.operation !== "SCROLL" && decision.operation !== "WAIT";
-      const control =
-        decision.target !== null ? snap.controls.find((c) => c.i === decision.target) : undefined;
-
-      if (needsTarget && !control) {
-        return finish("blocked", `chose ${decision.operation} but named no control on the page`);
-      }
-      if (needsTarget && decision.targetConfidence < MIN_CONFIDENCE()) {
-        return finish(
-          "blocked",
-          `not confident which control to use (${decision.targetConfidence.toFixed(2)})`
-        );
+      if (decision.choice === "DONE" || decision.choice === "BLOCKED") {
+        if (!(await browser.fresh(page))) {
+          page = await browser.observe();
+          continue;
+        }
+        return decision.choice === "DONE"
+          ? finish("done", "every requirement is visibly satisfied")
+          : finish("blocked", "no supported operation can make progress here");
       }
 
+      const action = page.actions.find((a) => a.id === decision.choice) as SnapshotAction | undefined;
+      if (!action) {
+        page = await browser.observe();
+        continue;
+      }
+
+      let text: string | null = null;
+      let textMs = 0;
       try {
-      switch (decision.operation) {
-        case "CLICK": {
-          if (!(await stillThere(session, control!))) {
-            return finish("blocked", "the page changed under the decision; handing over");
+        if (action.kind === "fill") {
+          if (!(await browser.fresh(page))) {
+            page = await browser.observe();
+            continue;
           }
-          await session.click(control!.x, control!.y);
-          await sleep(SETTLE_AFTER_CLICK_MS);
-          history.push(`Clicked ${describe(control!)}.`);
-          steps.push(step(n, decision, control!, `clicked ${describe(control!)}`, stepStarted));
-          break;
-        }
-
-        case "TYPE_TEXT": {
-          if (!(await stillThere(session, control!))) {
-            return finish("blocked", "the page changed under the decision; handing over");
+          const context = fieldContext(opts.goal, action, page, history);
+          const key = JSON.stringify(context);
+          if (pendingText !== null && pendingText.key === key) {
+            text = pendingText.text;
+            textMs = pendingText.ms;
+          } else {
+            const written = await fieldText(context, opts.textApiKey);
+            text = written.text;
+            textMs = written.latencyMs;
+            pendingText = { key, text: written.text, model: written.model, ms: written.latencyMs };
           }
-          const written = await writeFieldText({
-            goal: opts.goal,
-            fieldName: control!.name,
-            fieldRole: control!.role,
-            pageTitle: snap.title,
-            pageText: snap.text,
-            history,
-            apiKey: opts.mordiemApiKey,
-          });
-          if (!written.text) {
-            return finish("blocked", `nothing to type into "${control!.name}"`);
-          }
-          // Focus first: Input.insertText goes wherever the caret is.
-          await session.click(control!.x, control!.y);
-          await sleep(SETTLE_AFTER_TYPE_MS);
-          if (control!.value) await session.clearFocusedField();
-          await session.type(written.text);
-          await sleep(SETTLE_AFTER_TYPE_MS);
-          history.push(`Typed "${written.text}" into ${describe(control!)}.`);
-          steps.push({
-            ...step(n, decision, control!, `typed into ${describe(control!)}`, stepStarted),
-            text: written.text,
-            textMs: written.ms,
-          });
-          break;
         }
 
-        case "SELECT": {
-          await session.click(control!.x, control!.y);
-          await sleep(SETTLE_AFTER_CLICK_MS);
-          history.push(`Opened ${describe(control!)}.`);
-          steps.push({
-            ...step(n, decision, control!, `opened ${describe(control!)}`, stepStarted),
-          });
-          break;
-        }
-
-        case "SCROLL": {
-          await session.scrollBy(Math.round(snap.viewportHeight * 0.8));
-          await sleep(SETTLE_AFTER_CLICK_MS);
-          history.push("Scrolled down.");
-          steps.push(step(n, decision, null, "scrolled down", stepStarted));
-          break;
-        }
-
-        case "WAIT": {
-          await sleep(WAIT_MS);
-          history.push("Waited for the page.");
-          steps.push(step(n, decision, null, "waited", stepStarted));
-          break;
-        }
-      }
-      consecutiveFailures = 0;
+        // act() rechecks freshness immediately before input, including after
+        // text generation.
+        await browser.act(action, page, text ?? undefined);
+        pendingText = null;
       } catch (err) {
-        const why = err instanceof Error ? err.message : String(err);
-        consecutiveFailures += 1;
-        steps.push(step(n, decision, control ?? null, `failed: ${why}`, stepStarted));
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          return finish("blocked", `three steps in a row failed; last was "${why}"`);
+        if (err instanceof StalePage) {
+          log(`step ${history.length + 1}: page moved, observing again`);
+          page = await browser.observe();
+          finalUrl = page.url;
+          continue;
         }
-        // Let whatever the page is doing finish before looking again.
-        await sleep(1_000);
+        if (err instanceof ModelError) return finish("blocked", err.message);
+        throw err;
+      }
+
+      // Record execution before observing: a stale observation must not erase
+      // an action that really happened.
+      const entry: HistoryEntry & Step = {
+        step: history.length + 1,
+        action: action.label,
+        kind: action.kind,
+        operation: decision.operation,
+        text,
+        confidence: decision.confidence,
+        decisionMs: decision.latencyMs,
+        textMs,
+        pageChanged: null,
+        page_changed: null,
+        url: page.url,
+      };
+      history.push(entry);
+      steps.push(entry);
+
+      const before = page.fingerprint;
+      page = await browser.observe();
+      finalUrl = page.url;
+      entry.pageChanged = page.fingerprint !== before;
+      entry.page_changed = entry.pageChanged;
+      entry.url = page.url;
+
+      // Three actions in a row that changed nothing is not progress.
+      const recent = steps.slice(-3);
+      if (recent.length === 3 && recent.every((h) => h.pageChanged === false && h.kind !== "wait")) {
+        return finish("blocked", "three actions in a row changed nothing on the page");
       }
     }
-
-    return finish("exhausted", `stopped after ${limit} steps without finishing`);
   } catch (err) {
     return finish("error", err instanceof Error ? err.message : String(err));
   } finally {
-    session?.close();
+    browser?.close();
   }
 }
-
-/**
- * Reads the page, retrying briefly.
- *
- * A click that starts a navigation destroys the context the next read would run
- * in, so the first attempt after acting routinely fails. That is the page
- * working, not the loop breaking: wait for the new document and ask again.
- */
-async function readPage(session: BrowserSession, attempts = 3): Promise<PageSnapshot> {
-  let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const raw = await session.evaluate<string>(SNAPSHOT_JS);
-      if (raw) return JSON.parse(raw) as PageSnapshot;
-      lastErr = new Error("the page returned no snapshot");
-    } catch (err) {
-      lastErr = err;
-    }
-    await sleep(600);
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-}
-
-/**
- * Offers only what this page supports. An operation that was never offered
- * cannot be chosen, which is cheaper than validating it afterwards.
- */
-function allowedOperations(snap: PageSnapshot): Operation[] {
-  const ops: Operation[] = ["CLICK", "DONE", "BLOCKED", "WAIT"];
-  if (snap.controls.some(isTextField)) ops.push("TYPE_TEXT");
-  if (snap.controls.some((c) => c.tag === "select" || c.role.includes("combobox"))) ops.push("SELECT");
-  if (snap.scrollY + snap.viewportHeight < snap.scrollHeight - 20) ops.push("SCROLL");
-  return ops;
-}
-
-const isTextField = (c: Control) =>
-  c.tag === "textarea" ||
-  c.role.includes("textbox") ||
-  c.role.includes("searchbox") ||
-  /^input:(text|email|search|tel|url|password|number)$/.test(c.role);
-
-/**
- * Confirms the control is still the one that was chosen, and still where it
- * was. A decision is made against a snapshot; by the time it is acted on the
- * page may have moved, and clicking the old coordinates would hit whatever
- * slid into that spot.
- */
-async function stillThere(session: BrowserSession, control: Control): Promise<boolean> {
-  try {
-    const snap = await readPage(session, 1);
-    const now = snap.controls.find((c) => c.i === control.i);
-    if (!now) return false;
-    if (now.sig !== control.sig) return false;
-    // Allow a few pixels of drift; anything more is a different layout.
-    return Math.abs(now.x - control.x) <= 6 && Math.abs(now.y - control.y) <= 6;
-  } catch {
-    return false;
-  }
-}
-
-const describe = (c: Control) => `${c.role} "${c.name}"`;
-
-function step(
-  n: number,
-  decision: { operation: Operation; decisionMs?: number; ms: number },
-  control: Control | null,
-  note: string,
-  startedAt: number
-): Step {
-  return {
-    n,
-    operation: decision.operation,
-    target: control ? describe(control) : null,
-    note,
-    decisionMs: decision.ms,
-    totalMs: Date.now() - startedAt,
-  };
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Plain console, on purpose: these lines are how anyone tells whether a web task
- * went down the fast path at all. A run that leaves no trace is indistinguishable
- * from one that never happened, which cost real time to work out once already.
- */
-const log = (message: string) => console.log(`[fast-task] ${message}`);

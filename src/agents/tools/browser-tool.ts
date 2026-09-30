@@ -220,6 +220,28 @@ function resolveBrowserBaseUrl(params: {
 }
 
 /**
+ * The profile this call should actually use.
+ *
+ * Agents ask for "browserless" by name because that is what the docs and this
+ * tool's own description have always called the remote browser. In a company
+ * gateway that name means the container-wide session shared by every employee,
+ * while each agent also has its own — and under a provider that rents one
+ * browser per employee the shared one has no browser behind it at all, so the
+ * call fails with "target closed" however healthy the agent's own browser is.
+ *
+ * So a request for the shared session is read as "the remote browser", and the
+ * agent's own is what it gets. Naming any other profile is left alone: that is
+ * someone asking for a specific browser on purpose.
+ */
+const SHARED_PROFILE_NAMES = new Set(["browserless", "openclaw"]);
+
+function preferOwnProfile(requested: string | undefined, own: string | undefined): string | undefined {
+  if (!own || own === requested) return requested;
+  if (!requested) return own;
+  return SHARED_PROFILE_NAMES.has(requested) ? own : requested;
+}
+
+/**
  * The CDP address the fast loop should attach to, as a WebSocket.
  *
  * It uses the same profile every other browser action in this call would, so
@@ -273,7 +295,13 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile") ?? opts?.defaultProfile;
+      const requestedProfile = readStringParam(params, "profile") ?? undefined;
+      const profile = preferOwnProfile(requestedProfile, opts?.defaultProfile);
+      if (requestedProfile && profile !== requestedProfile) {
+        console.log(
+          `[browser] profile "${requestedProfile}" is the container-wide session; using this agent's own "${profile}" instead`,
+        );
+      }
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
@@ -846,7 +874,7 @@ export function createBrowserTool(opts?: {
             goal,
             startUrl,
             veniceApiKey,
-            mordiemApiKey,
+            textApiKey: mordiemApiKey,
             maxSteps,
           });
 
