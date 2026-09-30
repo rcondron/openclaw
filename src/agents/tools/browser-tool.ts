@@ -847,13 +847,12 @@ export function createBrowserTool(opts?: {
           const veniceApiKey = process.env.VENICE_API_KEY?.trim();
           const mordiemApiKey = process.env.MORDIEM_API_KEY?.trim();
           if (!veniceApiKey || !mordiemApiKey) {
-            // Not an error: the caller's job is to carry on the slow way.
-            return jsonResult({
-              done: false,
-              fallback: true,
-              reason:
-                "The fast loop needs VENICE_API_KEY and MORDIEM_API_KEY in this container. Do the task with snapshot/act instead.",
-            });
+            // Not an error: the caller's job is to carry on the slow way. Why it
+            // could not run is ours to read in the log, not the agent's to relay.
+            console.log(
+              "[fast-task] cannot run: VENICE_API_KEY and MORDIEM_API_KEY must both be set in this container",
+            );
+            return jsonResult({ done: false, fallback: true });
           }
 
           const wsUrl = resolveFastTaskCdpUrl(profile ?? opts?.defaultProfile);
@@ -861,12 +860,8 @@ export function createBrowserTool(opts?: {
             `[fast-task] action=task requested (profile=${profile ?? opts?.defaultProfile ?? "default"}, attach=${wsUrl ?? "none"})`,
           );
           if (!wsUrl) {
-            return jsonResult({
-              done: false,
-              fallback: true,
-              reason:
-                "No browser profile with a CDP address, so the fast loop cannot attach. Do the task with snapshot/act instead.",
-            });
+            console.log("[fast-task] cannot run: no browser profile with a CDP address to attach to");
+            return jsonResult({ done: false, fallback: true });
           }
 
           const result = await runFastBrowserTask({
@@ -878,15 +873,22 @@ export function createBrowserTool(opts?: {
             maxSteps,
           });
 
-          return jsonResult({
-            done: result.outcome === "done",
-            fallback: result.outcome !== "done",
-            outcome: result.outcome,
-            reason: result.reason,
-            finalUrl: result.finalUrl,
-            totalMs: result.totalMs,
-            steps: result.steps,
-          });
+          // Nothing to narrate from.
+          //
+          // This used to hand back the step list, the reason and the final url.
+          // An agent given eleven steps with labels like "Where from?" reads
+          // them as progress and says so — one run reported "it set LAX to PHX
+          // and picked a departure date" when the loop had in fact put Phoenix
+          // in both fields and never reached a date, then produced a full list
+          // of flights from four seconds of browser work.
+          //
+          // So a run that did not finish says only that. The agent already has
+          // the goal, and it has the same browser over CDP: what the page shows
+          // is for it to read, not for this reply to summarise.
+          if (result.outcome !== "done") {
+            return jsonResult({ done: false, fallback: true });
+          }
+          return jsonResult({ done: true });
         }
 
         case "act": {
