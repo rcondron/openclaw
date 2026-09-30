@@ -1,112 +1,102 @@
 ---
 name: tabhr-extension
-description: Control a manager-shared Chrome tab via the TabHR extension on port 9220. Use for shared-tab workflows (not general web browsing). DOM-first — extractPage, plan JS, runScript; screenshot only as fallback.
+description: Control a manager-shared Chrome tab through the TabHR extension on port 9220. Use for shared-tab work — authenticated sessions, HR portals, internal tools — not general browsing. Read with snapshot, act on what it returns; screenshot only when the page cannot be read.
 ---
 
 # TabHR Extension (shared Chrome tab)
 
-When a manager shares a Chrome tab with the agent, control flows through the **extension-tab-gateway** on port **9220** (`profile="chrome"` in the `browser` tool).
+When a manager shares a Chrome tab, control flows through the **extension-tab-gateway** on port **9220** — `profile="chrome"` in the `browser` tool.
 
-**Do not use CDP.** Automation is **DOM-first**:
+A shared tab is the person's own browser, already signed in as them. That is the whole point of it, and also the reason to be careful: everything you do is visible on their screen and done as them.
 
-1. **extractPage** — HTML (truncated), visible text, interactive element list
-2. Plan minimal JavaScript for the task
-3. **runScript** — inject via `chrome.scripting.executeScript` in **MAIN** world
-4. Re-extract or verify with another **runScript**
-5. **Screenshot + vision** only when DOM/script cannot resolve the task
+## How to drive it
 
-## When to Use
+Everything goes through the debugger now, so a page's Content Security Policy no longer decides whether you can act — sign-in pages included.
 
-- Manager has shared a specific browser tab (HR portals, internal tools, authenticated sessions)
-- User mentions TabHR extension, shared tab, or port 9220
-- **Not** for general browsing — use `profile="browserless"` instead
+1. **`snapshot`** — read the page: text and the interactive elements on it.
+2. **`act`** — click, type, press, select, on an element the snapshot gave you.
+3. **`snapshot`** again to confirm what changed.
+4. **`screenshot`** only when the page genuinely cannot be read as text.
+
+**You cannot run your own JavaScript.** There is no `evaluate` and no `runScript`. This is deliberate: injected scripts had to parse, had to be right about a DOM you cannot see, and failed with messages that said nothing useful — while `act` does the same work as real input. If you find yourself wanting to write a selector, take a snapshot and use what it names instead.
+
+For a whole job rather than one move, use **`action="task"`** with a goal. It reads the page, decides, acts, and looks again, roughly twice a second, and hands back to you if it gets stuck.
+
+## When to use this
+
+- The manager has shared a specific tab, or mentions the TabHR extension, a shared tab, or port 9220.
+- **Not** for general browsing — use your own browser (`profile` omitted, or `"browserless"`).
 
 ## Prerequisites
 
-- TabHR extension connected to gateway (`GET http://127.0.0.1:9220/status` returns `connectionIds`)
-- Use `targetId` = a **connection UUID** from status/tabs (not a CDP target id)
+- The extension is connected: `GET http://127.0.0.1:9220/status` returns `connectionIds`.
+- `targetId` is a **connection UUID** from `status`/`tabs` — not a CDP target id, and not a Playwright ref.
 
 ## Workflow
 
-### 1. List connections
+### 1. Find the shared tabs
 
 ```json
 { "action": "tabs", "profile": "chrome" }
 ```
 
-Or curl: `curl -s http://127.0.0.1:9220/status`
-
-### 2. Snapshot (DOM extract — preferred)
+### 2. Read the page
 
 ```json
 { "action": "snapshot", "profile": "chrome", "targetId": "<connection-uuid>" }
 ```
 
-Returns `html`, `text`, `interactiveElements` (buttons, links, inputs with selector hints).
+Returns the page text and `interactiveElements` — buttons, links and inputs with the hints you need to name them.
 
-### 3. Run JavaScript
+### 3. Act on it
 
-The `act` action requires a nested **`request`** object (do not put `kind`/`fn` at the top level):
+`act` takes a nested **`request`** object. Do not put `kind` at the top level.
 
 ```json
 {
   "action": "act",
   "profile": "chrome",
-  "request": {
-    "kind": "evaluate",
-    "targetId": "<connection-uuid>",
-    "fn": "document.querySelector('#submit')?.click(); return document.title;"
-  }
+  "request": { "kind": "click", "targetId": "<connection-uuid>", "ref": "<from the snapshot>" }
 }
 ```
 
-Scripts run in **MAIN** world by default (page JS context). Use short, focused snippets; re-snapshot after mutations.
+Typing works the same way with `{ "kind": "type", "text": "..." }`, and `{ "kind": "press", "key": "Enter" }` submits. Click the field before typing — text goes wherever the caret is.
 
-### 4. Navigate / type / click (fallback primitives)
+### 4. Navigate, if you must
 
-Prefer DOM scripts over navigate (may lose session). Navigate uses **`targetUrl`** (not `url`):
+Navigating a shared tab takes the person away from whatever they were looking at, and can lose a session. Prefer clicking a link the page already offers.
 
 ```json
-{
-  "action": "navigate",
-  "profile": "chrome",
-  "targetId": "<uuid>",
-  "targetUrl": "https://..."
-}
+{ "action": "navigate", "profile": "chrome", "targetId": "<uuid>", "targetUrl": "https://..." }
 ```
 
-Coordinate click and raw type via `act` with `request: { kind: "click", ... }` or curl endpoints; prefer **evaluate/runScript** for reliable DOM interaction.
+Note it is `targetUrl`, never `url`.
 
-### 5. Screenshot (last resort)
+### 5. Screenshot
 
 ```json
 { "action": "screenshot", "profile": "chrome", "targetId": "<uuid>" }
 ```
 
-After interpreting a screenshot, still prefer **runScript** for the actual action.
+For a canvas, a chart, an image — something with no text to read. After looking at one, still act through `snapshot` + `act`; do not guess coordinates.
 
 ## Rules
 
-- Always pass the same `targetId` (connection UUID) across snapshot → act → screenshot
-- Prefer `extractPage` data over screenshots for reading page content
-- Never assume CDP refs (`e12`) — extension snapshots expose `interactiveElements`, not Playwright refs
-- Keep scripts idempotent where possible; verify with a follow-up snapshot or small probe script
-- **`act`**: always nest `{ kind, targetId, fn, ... }` inside `"request"`
-- **`navigate`**: use `"targetUrl"`, never `"url"`
+- Pass the same `targetId` through snapshot → act → screenshot.
+- Take a fresh snapshot after anything that changes the page. Refs from an old snapshot may name something else by now.
+- Chrome shows "TabHR is debugging this browser" on the tab while you are attached. That is expected; it is what makes this work.
+- Do not do anything irreversible on someone's own browser without being asked to — sending a message, submitting a payment, accepting terms.
 
 ## Gateway API (direct curl)
 
+Rarely needed; the `browser` tool covers all of it.
+
 ```bash
-# Status
+# Which tabs are shared
 curl -s http://127.0.0.1:9220/status
 
-# Extract page
+# Read a page
 curl -s -X POST "http://127.0.0.1:9220/connection/<uuid>/command" \
   -H 'Content-Type: application/json' \
   -d '{"endpoint":"extractPage","maxHtmlChars":50000}'
-
-# Run script
-curl -s -X POST "http://127.0.0.1:9220/connection/<uuid>/command" \
-  -H 'Content-Type: application/json' \
-  -d '{"endpoint":"runScript","script":"return document.title;"}'
 ```

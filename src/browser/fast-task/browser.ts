@@ -35,6 +35,9 @@ export class Browser {
   private pending = new Map<number, Pending>();
   private sessionId: string | null = null;
   private afterInput: SnapshotAction | null = null;
+  /** Page targets seen so far, so a tab that opens mid-task can be spotted. */
+  private knownPages = new Set<string>();
+  private currentTargetId: string | null = null;
 
   private constructor(private readonly url: string) {}
 
@@ -129,16 +132,65 @@ export class Browser {
         await this.call<{ targetInfo: any }>("Target.getTargetInfo", { targetId }, false)
       ).targetInfo;
     }
+    for (const t of targetInfos) {
+      if (t.type === "page") this.knownPages.add(t.targetId);
+    }
+    await this.attachToPage(page.targetId);
+  }
+
+  /** Points this session at one page target. */
+  private async attachToPage(targetId: string): Promise<void> {
     const { sessionId } = await this.call<{ sessionId: string }>(
       "Target.attachToTarget",
-      { targetId: page.targetId, flatten: true },
+      { targetId, flatten: true },
       false,
     );
     this.sessionId = sessionId;
+    this.currentTargetId = targetId;
+    this.knownPages.add(targetId);
     await this.call("Page.enable").catch(() => {});
     await this.call("Runtime.enable").catch(() => {});
-    // Keep animations and menus rendering in a tab nobody is looking at.
     await this.call("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+  }
+
+  /**
+   * Moves to a tab that opened since the last look, the way a person's attention
+   * would.
+   *
+   * A link with target="_blank" — a Sign in button, most login flows — does its
+   * work in a new tab. Watching only the tab we started in, that click looks
+   * like it achieved nothing: the page is unchanged, so the same click gets
+   * chosen again, and each one opens another tab. Google's calendar page
+   * produced four identical sign-in tabs that way, and the login form was in
+   * every one of them, never in the page being read.
+   *
+   * Also covers our own tab being closed under us, which is the same problem
+   * seen from the other side.
+   */
+  private async followNewestTab(): Promise<void> {
+    let pages: { targetId: string; url: string }[];
+    try {
+      const { targetInfos } = await this.call<{ targetInfos: any[] }>("Target.getTargets", {}, false);
+      pages = targetInfos.filter(
+        (t) => t.type === "page" && !String(t.url).startsWith("devtools://"),
+      );
+    } catch {
+      return; // the browser will be reported unreachable by the caller
+    }
+    if (pages.length === 0) return;
+
+    const opened = pages.filter((p) => !this.knownPages.has(p.targetId));
+    for (const p of pages) this.knownPages.add(p.targetId);
+
+    const stillThere = pages.some((p) => p.targetId === this.currentTargetId);
+    // A tab that just opened wins; otherwise only move if ours has gone.
+    const pick = opened.length ? opened[opened.length - 1] : stillThere ? null : pages[pages.length - 1];
+    if (!pick || pick.targetId === this.currentTargetId) return;
+
+    console.log(
+      `[fast-task] following ${opened.length ? "a newly opened tab" : "the remaining tab"}: ${pick.url.slice(0, 80)}`,
+    );
+    await this.attachToPage(pick.targetId);
   }
 
   private async evaluate<T = unknown>(expression: string, awaitPromise = false): Promise<T> {
@@ -155,6 +207,7 @@ export class Browser {
    * that is the page working rather than the loop breaking.
    */
   async observe(): Promise<PageState> {
+    await this.followNewestTab();
     if (this.afterInput) {
       const action = this.afterInput;
       this.afterInput = null;

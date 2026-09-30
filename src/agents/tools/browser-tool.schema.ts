@@ -1,6 +1,20 @@
 import { Type } from "@sinclair/typebox";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 
+/**
+ * "evaluate" is deliberately absent.
+ *
+ * Running the model's own JavaScript in the page was the worst way to drive it.
+ * The code has to parse, and when it does not the failure says nothing useful —
+ * one agent retried "Unexpected token 'const'" every five seconds for ten
+ * minutes. It also has to be correct about a DOM it cannot see, when the actions
+ * below already do the same work through real input.
+ *
+ * Everything it was used for has a better route now: read the page with
+ * `snapshot`, act on what it returns, and let `action="task"` handle a whole
+ * job. On a shared Chrome tab those go through the debugger, so a page's
+ * Content Security Policy no longer decides whether the agent can act.
+ */
 const BROWSER_ACT_KINDS = [
   "click",
   "type",
@@ -11,7 +25,6 @@ const BROWSER_ACT_KINDS = [
   "fill",
   "resize",
   "wait",
-  "evaluate",
   "close",
 ] as const;
 
