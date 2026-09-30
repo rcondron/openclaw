@@ -56,6 +56,18 @@ export async function runFastBrowserTask(opts: {
   const history: HistoryEntry[] = [];
   let browser: Browser | null = null;
   let finalUrl = "";
+  /**
+   * Consecutive decisions thrown away because the page moved under them.
+   *
+   * A page that changes on its own — Google's, minting and discarding inputs for
+   * autocomplete — can fail the freshness check every single time. Nothing
+   * executes, so the step counter never advances and the step budget never
+   * trips: one run sat on "step 3" for minutes, spending a decision every half
+   * second. A page that will not hold still long enough to act on is a page to
+   * hand over, not to keep asking about.
+   */
+  let staleInARow = 0;
+  const MAX_STALE_IN_A_ROW = 6;
 
   const finish = (outcome: Outcome, reason: string): LoopResult => {
     log(
@@ -85,6 +97,13 @@ export async function runFastBrowserTask(opts: {
         finalUrl = page.url;
       }
 
+      if (staleInARow >= MAX_STALE_IN_A_ROW) {
+        return finish(
+          "blocked",
+          `the page changed under ${staleInARow} decisions in a row; it will not hold still long enough to act on`,
+        );
+      }
+
       let decision;
       try {
         decision = await choose(page, opts.goal, history, opts.veniceApiKey);
@@ -104,6 +123,7 @@ export async function runFastBrowserTask(opts: {
 
       if (decision.choice === "DONE" || decision.choice === "BLOCKED") {
         if (!(await browser.fresh(page))) {
+          staleInARow += 1;
           page = await browser.observe();
           continue;
         }
@@ -145,7 +165,10 @@ export async function runFastBrowserTask(opts: {
         pendingText = null;
       } catch (err) {
         if (err instanceof StalePage) {
-          log(`step ${history.length + 1}: page moved, observing again`);
+          staleInARow += 1;
+          log(
+            `step ${history.length + 1}: page moved, observing again (${staleInARow}/${MAX_STALE_IN_A_ROW})`,
+          );
           page = await browser.observe();
           finalUrl = page.url;
           continue;
@@ -169,6 +192,7 @@ export async function runFastBrowserTask(opts: {
         page_changed: null,
         url: page.url,
       };
+      staleInARow = 0;
       history.push(entry);
       steps.push(entry);
 
