@@ -258,7 +258,11 @@ function resolveFastTaskCdpUrl(profileName?: string): string | null {
     // there is nothing left to fall back to if it found none.
     const httpUrl = profile?.cdpUrl;
     if (!httpUrl) return null;
-    return httpUrl.replace(/^http/, "ws");
+    const ws = httpUrl.replace(/^http/, "ws").replace(/\/$/, "");
+    // A shared Chrome tab is reached through the extension-tab gateway, which
+    // serves the browser-level endpoint on a path rather than at the root. The
+    // employee's own browser answers at the root.
+    return profile?.driver === "extension" ? `${ws}/cdp` : ws;
   } catch {
     return null;
   }
@@ -278,6 +282,7 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       'START HERE for any web task: action="task" with goal="<the whole job in one sentence>" (and startUrl if you know where to begin). It reads the page as a list of controls and decides each step in about half a second, so it finishes in seconds what costs minutes step by step. It drives the same browser as every other action here, so whatever it leaves on screen is where you continue.',
+      'It works on a shared Chrome tab too: pass profile="chrome" and omit startUrl, since the tab is already where the person left it.',
       'The reply says what to do next: done=true means the task is finished — stop, do not redo it to check. fallback=true means it stopped early; read reason and steps, then finish the job yourself with snapshot/act FROM WHERE IT LEFT OFF, not from the beginning.',
       'Do not use action="task" for a step that cannot be taken back (sending a message, submitting a payment, accepting terms) — do those yourself, one action at a time.',
       "Everything else: control the browser step by step via the browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
