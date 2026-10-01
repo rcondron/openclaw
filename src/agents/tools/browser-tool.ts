@@ -850,17 +850,22 @@ export function createBrowserTool(opts?: {
           const maxSteps =
             typeof rawMaxSteps === "number" ? Math.min(Math.max(rawMaxSteps, 1), 60) : undefined;
 
-          const veniceApiKey = process.env.VENICE_API_KEY?.trim();
           const mordiemApiKey = process.env.MORDIEM_API_KEY?.trim();
-          // A local decision model needs no key of its own; the writing model
-          // still does, because it is a hosted chat model either way.
-          const { usingLocalDecisionModel } = await import("../../browser/fast-task/model.js");
-          const decisionKeyNeeded = !usingLocalDecisionModel();
-          if ((decisionKeyNeeded && !veniceApiKey) || !mordiemApiKey) {
+          // Whichever provider is configured supplies its own key, or needs none
+          // when it runs next door. The writing model always needs one, because
+          // it is a hosted chat model either way.
+          const { decisionApiKey, usingLocalDecisionModel } = await import(
+            "../../browser/fast-task/model.js"
+          );
+          const decisionKey = decisionApiKey({
+            venice: process.env.VENICE_API_KEY?.trim(),
+            typesafe: process.env.TYPESAFE_API_KEY?.trim(),
+          });
+          if ((!usingLocalDecisionModel() && !decisionKey) || !mordiemApiKey) {
             // Not an error: the caller's job is to carry on the slow way. Why it
             // could not run is ours to read in the log, not the agent's to relay.
             console.log(
-              `[fast-task] cannot run: ${decisionKeyNeeded ? "VENICE_API_KEY and " : ""}MORDIEM_API_KEY must be set in this container`,
+              "[fast-task] cannot run: a decision model (LAYA_URL, TYPESAFE_API_KEY or VENICE_API_KEY) and MORDIEM_API_KEY must be set in this container",
             );
             return jsonResult({ done: false, fallback: true });
           }
@@ -878,7 +883,7 @@ export function createBrowserTool(opts?: {
             cdpUrl: wsUrl,
             goal,
             startUrl,
-            veniceApiKey: veniceApiKey ?? "",
+            veniceApiKey: decisionKey,
             textApiKey: mordiemApiKey,
             maxSteps,
           });

@@ -32,18 +32,55 @@ import type { PageState, SnapshotAction } from "./snapshot.js";
  * Set LAYA_URL to use the local one; without it, Venice.
  */
 const LAYA_URL = () => process.env.LAYA_URL?.trim().replace(/\/$/, "") || null;
+const TYPESAFE_KEY = () => process.env.TYPESAFE_API_KEY?.trim() || null;
 
-export const usingLocalDecisionModel = () => LAYA_URL() !== null;
+/** Which of the three answers the decision call. */
+type Provider = "local" | "typesafe" | "venice";
+
+function provider(): Provider {
+  if (LAYA_URL()) return "local";
+  if (TYPESAFE_KEY()) return "typesafe";
+  return "venice";
+}
+
+export const usingLocalDecisionModel = () => provider() === "local";
+
+/**
+ * The decision model needs no key of its own when it runs next door, and uses
+ * its own when it is TypeSafe's. Venice is the fallback, and the only one that
+ * needs the request reshaping.
+ */
+export function decisionApiKey(env: {
+  venice?: string;
+  typesafe?: string;
+}): string {
+  switch (provider()) {
+    case "local":
+      return "";
+    case "typesafe":
+      return env.typesafe ?? TYPESAFE_KEY() ?? "";
+    default:
+      return env.venice ?? "";
+  }
+}
 
 const DECISIONS_URL = () => {
-  const laya = LAYA_URL();
-  if (laya) return `${laya}/decisions`;
-  return (
-    (process.env.VENICE_BASE_URL?.trim() || "https://api.venice.ai/api/v1").replace(/\/$/, "") +
-    "/decisions"
-  );
+  switch (provider()) {
+    case "local":
+      return `${LAYA_URL()}/decisions`;
+    case "typesafe":
+      return (
+        process.env.TYPESAFE_BASE_URL?.trim().replace(/\/$/, "") || "https://api.typesafe.ai/v1"
+      ) + "/systemone";
+    default:
+      return (
+        (process.env.VENICE_BASE_URL?.trim() || "https://api.venice.ai/api/v1").replace(/\/$/, "") +
+        "/decisions"
+      );
+  }
 };
-const JEV_MODEL = () => (LAYA_URL() ? "laya-browser" : process.env.JEV_MODEL?.trim() || "jev-latest");
+const JEV_MODEL = () =>
+  provider() === "local" ? "laya-browser" : process.env.JEV_MODEL?.trim() || "jev-latest";
 
 const TEXT_BASE = () =>
   (process.env.FAST_TASK_TEXT_BASE_URL?.trim() ||
@@ -236,7 +273,7 @@ export async function choose(
     },
   };
   for (const [operation, candidates] of Object.entries(targets)) {
-    const criteria: Record<string, string> = {};
+    const criteria: Record<string, unknown> = {};
     for (const [index, a] of Object.entries(candidates)) {
       const described: Record<string, unknown> = {
         element: `[${index}] ${a.label}`,
@@ -245,8 +282,10 @@ export async function choose(
       for (const key of ["role", "checked", "selected", "expanded"] as const) {
         if (a[key] !== undefined) described[key] = a[key];
       }
-      // Venice takes criteria values as strings; the content is unchanged.
-      criteria[index] = JSON.stringify(described);
+      // Venice is the only one that insists on strings. TypeSafe and the local
+      // model take the object the model was trained on, so send that where it
+      // is accepted rather than flattening it everywhere.
+      criteria[index] = provider() === "venice" ? JSON.stringify(described) : (described as never);
     }
     questions[`${operation.toLowerCase()}_target`] = {
       type: "choice",
