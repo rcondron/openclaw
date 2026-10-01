@@ -23,6 +23,57 @@ const CALL_TIMEOUT_MS = 20_000;
 
 export class StalePage extends Error {}
 
+/** The names of what `pageKey()` returns, in order, for readable diagnostics. */
+const PAGE_KEY_FIELDS = [
+  "timeOrigin",
+  "url",
+  "scrollX",
+  "scrollY",
+  "viewportWidth",
+  "viewportHeight",
+  "formFields",
+] as const;
+
+/**
+ * Says what actually differed when a decision was judged stale.
+ *
+ * Without this, every cause looks the same from the outside — a page that
+ * navigated, an element that changed, a form field edited elsewhere, a document
+ * that cannot be read at all — and all of them print "page moved". Three
+ * separate theories about one failing run were wrong because the log could not
+ * tell them apart.
+ */
+function whyNotFresh(current: unknown, recorded: unknown[]): string {
+  if (current === null) return "the identity cache is gone — a new document loaded";
+  if (current && typeof current === "object" && "__unreadable" in current) {
+    return `the page could not be read (${(current as { __unreadable: string }).__unreadable})`;
+  }
+  if (!Array.isArray(current)) return "the page answered something unexpected";
+
+  const [liveKey, liveGuard] = current as [unknown[], unknown];
+  const [wasKey, wasGuard] = recorded as [unknown[], unknown];
+  const reasons: string[] = [];
+
+  if (JSON.stringify(liveKey) !== JSON.stringify(wasKey)) {
+    for (let i = 0; i < PAGE_KEY_FIELDS.length; i++) {
+      const was = JSON.stringify(wasKey?.[i]);
+      const now = JSON.stringify(liveKey?.[i]);
+      if (was === now) continue;
+      if (PAGE_KEY_FIELDS[i] === "formFields") {
+        const a = Array.isArray(wasKey?.[i]) ? (wasKey[i] as unknown[]).length : 0;
+        const b = Array.isArray(liveKey?.[i]) ? (liveKey[i] as unknown[]).length : 0;
+        reasons.push(a === b ? `a form field's value changed (${a} fields)` : `form fields ${a} -> ${b}`);
+      } else {
+        reasons.push(`${PAGE_KEY_FIELDS[i]} ${String(was).slice(0, 60)} -> ${String(now).slice(0, 60)}`);
+      }
+    }
+  }
+  if (JSON.stringify(liveGuard) !== JSON.stringify(wasGuard)) {
+    reasons.push(liveGuard === null ? "the chosen element is gone or hidden" : "the chosen element changed");
+  }
+  return reasons.length ? reasons.join("; ") : "nothing identifiable (shapes differ)";
+}
+
 interface Pending {
   resolve: (value: any) => void;
   reject: (err: Error) => void;
@@ -268,13 +319,18 @@ export class Browser {
       if (typeof node !== "number") return false;
       const current = await this.evaluate<unknown>(
         `(() => { const c=window.__jevFast; return c ? [c.pageKey(),c.guard(c.nodes.get(${node}))] : null; })()`,
-      ).catch(() => null);
-      return (
-        JSON.stringify(current) === JSON.stringify([page.page_key, page.guards[String(node)]])
-      );
+      ).catch((err) => ({ __unreadable: err instanceof Error ? err.message : String(err) }));
+      const recorded = [page.page_key, page.guards[String(node)]];
+      if (JSON.stringify(current) === JSON.stringify(recorded)) return true;
+      console.log(`[fast-task] not fresh: ${whyNotFresh(current, recorded)}`);
+      return false;
     }
     const marker = await this.evaluate<unknown>(MARKER_JS).catch(() => null);
-    return JSON.stringify(marker) === JSON.stringify(page.marker);
+    if (JSON.stringify(marker) === JSON.stringify(page.marker)) return true;
+    console.log(
+      `[fast-task] not fresh: ${marker === null ? "the page marker could not be read" : "the page marker changed"}`,
+    );
+    return false;
   }
 
   /** Performs one observed action, re-checking the page immediately beforehand. */
