@@ -42,6 +42,39 @@ export interface LoopResult {
 
 const log = (message: string) => console.log(`[fast-task] ${message}`);
 
+/** Longest repeating pattern worth looking for: next/previous is two, a tab dance three or four. */
+const MAX_CYCLE_LENGTH = 6;
+
+/**
+ * Finds a cycle the run has fallen into, if there is one.
+ *
+ * Withdrawing a single repeated action was not enough: the model simply found a
+ * pair. One run alternated next month, previous month, next month, previous
+ * month — each choice different from the one before it, each one undoing it, and
+ * the page changing every time so nothing looked stuck.
+ *
+ * So look at the shape of the sequence rather than at single actions. The last
+ * 2L (or 3L for a single action, since choosing the same thing twice can be
+ * legitimate) choices repeating the same L actions is a loop, however sensible
+ * each individual choice looked. The whole cycle is withdrawn: leaving any part
+ * of it offered invites the model straight back in.
+ */
+function findCycle(sequence: string[]): string[] | null {
+  for (let length = 1; length <= MAX_CYCLE_LENGTH; length++) {
+    const repeats = length === 1 ? 3 : 2;
+    const needed = length * repeats;
+    if (sequence.length < needed) continue;
+    const tail = sequence.slice(-needed);
+    const pattern = tail.slice(0, length);
+    let looping = true;
+    for (let i = length; i < tail.length && looping; i++) {
+      if (tail[i] !== pattern[i % length]) looping = false;
+    }
+    if (looping) return [...new Set(pattern)];
+  }
+  return null;
+}
+
 export async function runFastBrowserTask(opts: {
   cdpUrl: string;
   goal: string;
@@ -85,9 +118,8 @@ export async function runFastBrowserTask(opts: {
    * model has to find another way or say it is blocked.
    */
   const suppressed = new Set<string>();
-  const REPEATS_BEFORE_WITHDRAWN = 3;
-  let lastChoice: string | null = null;
-  let sameChoiceInARow = 0;
+  /** Every action chosen this run, in order, so a cycle in them can be seen. */
+  const chosen: string[] = [];
 
   const finish = (outcome: Outcome, reason: string): LoopResult => {
     log(
@@ -141,26 +173,21 @@ export async function runFastBrowserTask(opts: {
           ` (decide ${decision.latencyMs}ms, confidence ${decision.confidence.toFixed(2)})`,
       );
 
-      if (decision.choice === lastChoice) {
-        sameChoiceInARow += 1;
-      } else {
-        lastChoice = decision.choice;
-        sameChoiceInARow = 1;
-      }
-      if (
-        sameChoiceInARow >= REPEATS_BEFORE_WITHDRAWN &&
-        decision.choice !== "DONE" &&
-        decision.choice !== "BLOCKED"
-      ) {
-        const label = page.actions.find((a) => a.id === decision.choice)?.label ?? decision.choice;
-        log(`withdrawing "${String(label).slice(0, 50)}" — chosen ${sameChoiceInARow} times with nothing to show`);
-        suppressed.add(decision.choice);
-        lastChoice = null;
-        sameChoiceInARow = 0;
-        if (suppressed.size >= page.actions.length) {
-          return finish("blocked", "every option on this page has been tried without progress");
+      if (decision.choice !== "DONE" && decision.choice !== "BLOCKED") {
+        chosen.push(decision.choice);
+        const cycle = findCycle(chosen);
+        if (cycle) {
+          const naming = (id: string) =>
+            `"${String(page.actions.find((a) => a.id === id)?.label ?? id).slice(0, 36)}"`;
+          log(`withdrawing ${cycle.map(naming).join(" -> ")} — going round in circles`);
+          for (const id of cycle) suppressed.add(id);
+          chosen.length = 0;
+          const left = page.actions.filter((a) => !suppressed.has(a.id));
+          if (left.length === 0) {
+            return finish("blocked", "every option on this page has been tried without progress");
+          }
+          continue;
         }
-        continue;
       }
 
       if (decision.choice === "DONE" || decision.choice === "BLOCKED") {
