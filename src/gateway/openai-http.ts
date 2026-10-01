@@ -43,6 +43,12 @@ type OpenAiChatCompletionRequest = {
   user?: unknown;
 };
 
+/**
+ * Often enough that no read timeout can expire between beats, rare enough to be
+ * nothing on the wire. Node's default body timeout is five minutes.
+ */
+const HEARTBEAT_INTERVAL_MS = 20_000;
+
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -291,6 +297,29 @@ export async function handleOpenAiHttpRequest(
   let sawAssistantDelta = false;
   let closed = false;
 
+  /**
+   * Keeps the response alive while the agent is working but saying nothing.
+   *
+   * A turn that drives a browser spends minutes on tool calls, and tool calls
+   * produce no assistant output — so nothing reaches the client, which cannot
+   * tell a busy agent from a dead one. Node's HTTP client gives up on a body
+   * that has been silent for five minutes, and callers lost completed work that
+   * way: the agent kept clicking, the connection was already gone.
+   *
+   * A comment line is the SSE way to say "still here". Parsers ignore any line
+   * beginning with a colon, so this is invisible to the client while still being
+   * bytes on the wire, which is all a read timeout is counting.
+   */
+  const heartbeat = setInterval(() => {
+    if (closed || res.writableEnded) {
+      return;
+    }
+    res.write(": keepalive\n\n");
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref?.();
+  const stopHeartbeat = () => clearInterval(heartbeat);
+  res.on("close", stopHeartbeat);
+
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
       return;
@@ -337,6 +366,7 @@ export async function handleOpenAiHttpRequest(
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
         closed = true;
+        stopHeartbeat();
         unsubscribe();
         writeDone(res);
         res.end();
@@ -346,6 +376,7 @@ export async function handleOpenAiHttpRequest(
 
   req.on("close", () => {
     closed = true;
+    stopHeartbeat();
     unsubscribe();
     abortOpenAiHttpRun(runId);
   });
@@ -430,6 +461,7 @@ export async function handleOpenAiHttpRequest(
       cleanupRun();
       if (!closed) {
         closed = true;
+        stopHeartbeat();
         unsubscribe();
         writeDone(res);
         res.end();
