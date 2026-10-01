@@ -852,11 +852,15 @@ export function createBrowserTool(opts?: {
 
           const veniceApiKey = process.env.VENICE_API_KEY?.trim();
           const mordiemApiKey = process.env.MORDIEM_API_KEY?.trim();
-          if (!veniceApiKey || !mordiemApiKey) {
+          // A local decision model needs no key of its own; the writing model
+          // still does, because it is a hosted chat model either way.
+          const { usingLocalDecisionModel } = await import("../../browser/fast-task/model.js");
+          const decisionKeyNeeded = !usingLocalDecisionModel();
+          if ((decisionKeyNeeded && !veniceApiKey) || !mordiemApiKey) {
             // Not an error: the caller's job is to carry on the slow way. Why it
             // could not run is ours to read in the log, not the agent's to relay.
             console.log(
-              "[fast-task] cannot run: VENICE_API_KEY and MORDIEM_API_KEY must both be set in this container",
+              `[fast-task] cannot run: ${decisionKeyNeeded ? "VENICE_API_KEY and " : ""}MORDIEM_API_KEY must be set in this container`,
             );
             return jsonResult({ done: false, fallback: true });
           }
@@ -874,7 +878,7 @@ export function createBrowserTool(opts?: {
             cdpUrl: wsUrl,
             goal,
             startUrl,
-            veniceApiKey,
+            veniceApiKey: veniceApiKey ?? "",
             textApiKey: mordiemApiKey,
             maxSteps,
           });

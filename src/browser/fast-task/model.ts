@@ -20,10 +20,30 @@
 import { NEXT_ACTION, TARGET, TEXT_VALUE } from "./questions.js";
 import type { PageState, SnapshotAction } from "./snapshot.js";
 
-const DECISIONS_URL = () =>
-  (process.env.VENICE_BASE_URL?.trim() || "https://api.venice.ai/api/v1").replace(/\/$/, "") +
-  "/decisions";
-const JEV_MODEL = () => process.env.JEV_MODEL?.trim() || "jev-latest";
+/**
+ * Where the decision comes from.
+ *
+ * Two models answer the same request body. Jev is hosted and costs a network
+ * round trip — 400ms to a second. laya-browser is 322M parameters on whatever
+ * GPU is to hand and answers in under 20ms, because it ships a `systemone`
+ * method that speaks jev's own protocol. Nothing else in the loop can tell them
+ * apart.
+ *
+ * Set LAYA_URL to use the local one; without it, Venice.
+ */
+const LAYA_URL = () => process.env.LAYA_URL?.trim().replace(/\/$/, "") || null;
+
+export const usingLocalDecisionModel = () => LAYA_URL() !== null;
+
+const DECISIONS_URL = () => {
+  const laya = LAYA_URL();
+  if (laya) return `${laya}/decisions`;
+  return (
+    (process.env.VENICE_BASE_URL?.trim() || "https://api.venice.ai/api/v1").replace(/\/$/, "") +
+    "/decisions"
+  );
+};
+const JEV_MODEL = () => (LAYA_URL() ? "laya-browser" : process.env.JEV_MODEL?.trim() || "jev-latest");
 
 const TEXT_BASE = () =>
   (process.env.FAST_TASK_TEXT_BASE_URL?.trim() ||
