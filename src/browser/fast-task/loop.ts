@@ -69,6 +69,26 @@ export async function runFastBrowserTask(opts: {
   let staleInARow = 0;
   const MAX_STALE_IN_A_ROW = 6;
 
+  /**
+   * Options withdrawn because choosing them achieved nothing.
+   *
+   * The model is asked the same question every round, so an action that does not
+   * move the task along gets chosen again, and again: one run clicked Google
+   * Calendar's "Month" button sixty times at 0.86 confidence until the step
+   * budget ended it. The guard against this was "three actions in a row that
+   * changed nothing", and it never fired, because Calendar rewrites its DOM on
+   * every click — the page always looked different even though nothing had
+   * happened.
+   *
+   * So repetition is judged by what was chosen rather than by what the page did.
+   * Three times in a row and the option is withdrawn for the rest of the run; the
+   * model has to find another way or say it is blocked.
+   */
+  const suppressed = new Set<string>();
+  const REPEATS_BEFORE_WITHDRAWN = 3;
+  let lastChoice: string | null = null;
+  let sameChoiceInARow = 0;
+
   const finish = (outcome: Outcome, reason: string): LoopResult => {
     log(
       `${outcome} after ${steps.length} step(s) in ${Date.now() - startedAt}ms — ${reason}` +
@@ -106,7 +126,7 @@ export async function runFastBrowserTask(opts: {
 
       let decision;
       try {
-        decision = await choose(page, opts.goal, history, opts.veniceApiKey);
+        decision = await choose(page, opts.goal, history, opts.veniceApiKey, suppressed);
       } catch (err) {
         if (err instanceof StalePage) {
           page = await browser.observe();
@@ -120,6 +140,28 @@ export async function runFastBrowserTask(opts: {
           (decision.target ? ` -> [${decision.target}]` : "") +
           ` (decide ${decision.latencyMs}ms, confidence ${decision.confidence.toFixed(2)})`,
       );
+
+      if (decision.choice === lastChoice) {
+        sameChoiceInARow += 1;
+      } else {
+        lastChoice = decision.choice;
+        sameChoiceInARow = 1;
+      }
+      if (
+        sameChoiceInARow >= REPEATS_BEFORE_WITHDRAWN &&
+        decision.choice !== "DONE" &&
+        decision.choice !== "BLOCKED"
+      ) {
+        const label = page.actions.find((a) => a.id === decision.choice)?.label ?? decision.choice;
+        log(`withdrawing "${String(label).slice(0, 50)}" — chosen ${sameChoiceInARow} times with nothing to show`);
+        suppressed.add(decision.choice);
+        lastChoice = null;
+        sameChoiceInARow = 0;
+        if (suppressed.size >= page.actions.length) {
+          return finish("blocked", "every option on this page has been tried without progress");
+        }
+        continue;
+      }
 
       if (decision.choice === "DONE" || decision.choice === "BLOCKED") {
         if (!(await browser.fresh(page))) {

@@ -206,8 +206,21 @@ export async function choose(
   goal: string,
   history: HistoryEntry[],
   apiKey: string,
+  /**
+   * Action ids to leave out of the table.
+   *
+   * An option the model keeps choosing to no effect will keep being chosen for
+   * as long as it is offered — one run clicked the same "Month" button sixty
+   * times at identical confidence. Withdrawing it is the only thing that
+   * changes the question.
+   */
+  suppressed?: ReadonlySet<string>,
 ): Promise<Decision> {
-  const { elements, targets, controls } = actionSpace(state.actions);
+  const offered =
+    suppressed && suppressed.size > 0
+      ? state.actions.filter((a) => !suppressed.has(a.id))
+      : state.actions;
+  const { elements, targets, controls } = actionSpace(offered);
 
   const operations: Record<string, string> = {};
   for (const key of Object.keys(targets)) operations[key] = OPERATION_LABELS[key];
