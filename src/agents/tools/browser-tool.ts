@@ -268,6 +268,18 @@ function resolveFastTaskCdpUrl(profileName?: string): string | null {
   }
 }
 
+/**
+ * What an agent may do to its own browser.
+ *
+ * Everything else is shared-tab-only. `task` runs on Browser Use's hosted
+ * agent, in a browser this process cannot reach, so there is nothing here for
+ * snapshot or act to read or click — they would drive a second, emptier browser
+ * instead. Offering both only ever gave the model a slower way to do the same
+ * job, and it kept taking it: told to book a calendar meeting it went
+ * click-by-click and failed, twice, with `task` sitting right there.
+ */
+const OWN_BROWSER_ACTIONS = new Set(["task", "status", "profiles", "start", "stop"]);
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -360,6 +372,17 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+
+      // One thing to do on your own browser: say what you want done.
+      if (profile !== "chrome" && !OWN_BROWSER_ACTIONS.has(action)) {
+        throw new Error(
+          `action="${action}" does not exist on your own browser. Web jobs are done with a single ` +
+            `call: action="task", goal="<the whole job in one sentence>", and startUrl if you know ` +
+            `where to begin. The job runs in a browser of its own, signed in as you, and the answer ` +
+            `comes back in result. Step-by-step actions exist only for a Chrome tab your manager has ` +
+            `shared with you (profile="chrome").`,
+        );
+      }
 
       switch (action) {
         case "status":
