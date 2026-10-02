@@ -20,13 +20,7 @@ Everything goes through the debugger now, so a page's Content Security Policy no
 
 **You cannot run your own JavaScript.** There is no `evaluate` and no `runScript`. This is deliberate: injected scripts had to parse, had to be right about a DOM you cannot see, and failed with messages that said nothing useful — while `act` does the same work as real input. If you find yourself wanting to write a selector, take a snapshot and use what it names instead.
 
-For a whole job rather than one move, use **`action="task"`** with a goal:
-
-```json
-{ "action": "task", "profile": "chrome", "goal": "<the whole job in one sentence>" }
-```
-
-It reads the page, decides, acts and looks again, roughly twice a second, and hands back to you if it gets stuck. Leave `startUrl` out on a shared tab — the tab is already where the person left it, and navigating would take them somewhere else. If a click opens a new tab, it follows it.
+**`action="task"` cannot be used here.** It hands the job to a hosted agent that opens a browser of its own, so it would work somewhere the person cannot see while their shared tab sat untouched — and anything it signed into or filled in would be in the wrong browser. On a shared tab, do the work yourself with `snapshot` and `act`.
 
 ## When to use this
 

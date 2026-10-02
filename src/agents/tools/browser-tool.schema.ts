@@ -29,8 +29,9 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 const BROWSER_TOOL_ACTIONS = [
-  // First in the list because it is the first thing to try: one call that does
-  // a whole web task, falling back to the step-by-step actions below.
+  // First in the list because it is the first thing to try: one call hands a
+  // whole web task to a hosted agent, in a browser of its own. When it cannot
+  // finish, the step-by-step actions below are how the job gets done.
   "task",
   "status",
   "start",
@@ -127,8 +128,8 @@ export const BrowserToolSchema = Type.Object({
   request: Type.Optional(BrowserActSchema),
   /** action="task": the whole job in one sentence, e.g. "find flights from Zurich to London on 4 October". */
   goal: Type.Optional(Type.String()),
-  /** action="task": page to start on. Omit to work with whatever is already open. */
+  /** action="task": page to start on. The run opens its own browser, so say where to begin. */
   startUrl: Type.Optional(Type.String()),
-  /** action="task": give up after this many steps (default 25). */
+  /** Unused: the hosted run decides how many steps it needs. Kept so older calls still parse. */
   maxSteps: Type.Optional(Type.Number()),
 });
