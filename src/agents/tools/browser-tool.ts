@@ -20,7 +20,7 @@ import {
   browserTabs,
 } from "../../browser/client.js";
 import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
-import { runFastBrowserTask } from "../../browser/fast-task/loop.js";
+import { runHostedBrowserTask } from "../../browser/bu-ultrafast.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
@@ -273,6 +273,8 @@ export function createBrowserTool(opts?: {
   allowHostControl?: boolean;
   /** Used when a call names no profile, so each agent lands in its own browser session. */
   defaultProfile?: string;
+  /** Who this agent is, for runs TabHR executes on its behalf. */
+  agentId?: string;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -846,64 +848,28 @@ export function createBrowserTool(opts?: {
           if (startUrl && !/^https?:\/\//i.test(startUrl)) {
             throw new Error("startUrl must be http(s)");
           }
-          const rawMaxSteps = params.maxSteps;
-          const maxSteps =
-            typeof rawMaxSteps === "number" ? Math.min(Math.max(rawMaxSteps, 1), 60) : undefined;
 
-          const mordiemApiKey = process.env.MORDIEM_API_KEY?.trim();
-          // Whichever provider is configured supplies its own key, or needs none
-          // when it runs next door. The writing model always needs one, because
-          // it is a hosted chat model either way.
-          const { decisionApiKey, usingLocalDecisionModel } = await import(
-            "../../browser/fast-task/model.js"
-          );
-          const decisionKey = decisionApiKey({
-            venice: process.env.VENICE_API_KEY?.trim(),
-            typesafe: process.env.TYPESAFE_API_KEY?.trim(),
-          });
-          if ((!usingLocalDecisionModel() && !decisionKey) || !mordiemApiKey) {
-            // Not an error: the caller's job is to carry on the slow way. Why it
-            // could not run is ours to read in the log, not the agent's to relay.
-            console.log(
-              "[fast-task] cannot run: a decision model (LAYA_URL, TYPESAFE_API_KEY or VENICE_API_KEY) and MORDIEM_API_KEY must be set in this container",
-            );
-            return jsonResult({ done: false, fallback: true });
-          }
-
-          const wsUrl = resolveFastTaskCdpUrl(profile ?? opts?.defaultProfile);
-          console.log(
-            `[fast-task] action=task requested (profile=${profile ?? opts?.defaultProfile ?? "default"}, attach=${wsUrl ?? "none"})`,
-          );
-          if (!wsUrl) {
-            console.log("[fast-task] cannot run: no browser profile with a CDP address to attach to");
-            return jsonResult({ done: false, fallback: true });
-          }
-
-          const result = await runFastBrowserTask({
-            cdpUrl: wsUrl,
+          // The whole task runs on Browser Use's hosted agent. We do not drive
+          // the browser for it, and neither does the loop in fast-task/ — it
+          // happens on their side, in this employee's own browser profile.
+          console.log(`[bu-ultrafast] action=task requested (agent=${opts?.agentId ?? "unknown"})`);
+          const outcome = await runHostedBrowserTask({
+            agentId: opts?.agentId ?? "",
             goal,
             startUrl,
-            veniceApiKey: decisionKey,
-            textApiKey: mordiemApiKey,
-            maxSteps,
           });
 
-          // Nothing to narrate from.
+          // A run that did not finish says only that.
           //
           // This used to hand back the step list, the reason and the final url.
           // An agent given eleven steps with labels like "Where from?" reads
           // them as progress and says so — one run reported "it set LAX to PHX
           // and picked a departure date" when the loop had in fact put Phoenix
           // in both fields and never reached a date, then produced a full list
-          // of flights from four seconds of browser work.
-          //
-          // So a run that did not finish says only that. The agent already has
-          // the goal, and it has the same browser over CDP: what the page shows
-          // is for it to read, not for this reply to summarise.
-          if (result.outcome !== "done") {
-            return jsonResult({ done: false, fallback: true });
-          }
-          return jsonResult({ done: true });
+          // of flights from four seconds of browser work. So there is nothing
+          // here to narrate from: the agent already has the goal, and carries
+          // on with the step-by-step actions instead.
+          return jsonResult(outcome);
         }
 
         case "act": {
