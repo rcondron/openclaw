@@ -86,6 +86,26 @@ export function resolveSessionAgentIds(params: { sessionKey?: string; config?: O
   return { defaultAgentId, sessionAgentId };
 }
 
+/**
+ * Browser profile a session's agent should use by default.
+ *
+ * A company gateway hosts every colleague as a separate agent in one process, so
+ * without this they all share the default browser profile - one cookie jar, and
+ * signing one colleague into a site signs the rest out. Returning the agent's own
+ * profile keeps their logins apart.
+ */
+export function resolveAgentBrowserProfile(params: {
+  sessionKey?: string;
+  config?: OpenClawConfig;
+}): string | undefined {
+  const agentId = resolveSessionAgentId(params);
+  const entry = (params.config?.agents?.list ?? []).find(
+    (candidate) => normalizeAgentId(candidate.id ?? "") === agentId,
+  );
+  const profile = entry?.browserProfile?.trim();
+  return profile ? profile : undefined;
+}
+
 export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;

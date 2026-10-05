@@ -600,6 +600,11 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    /**
+     * Browser profile used when a browser call names none, so agents sharing one
+     * gateway keep separate logins instead of one shared cookie jar.
+     */
+    browserProfile: z.string().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

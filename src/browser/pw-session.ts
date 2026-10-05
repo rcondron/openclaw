@@ -102,8 +102,17 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 
-let cached: ConnectedBrowser | null = null;
-let connecting: Promise<ConnectedBrowser> | null = null;
+/**
+ * One connection per CDP endpoint, not one connection overall.
+ *
+ * Profiles can point at different browsers (and, with per-employee browser
+ * sessions, they routinely do). A single slot meant every switch between
+ * profiles tore down the incumbent connection and dialled again, so two agents
+ * browsing in turn kept knocking each other offline; an in-flight connect was
+ * also handed to whoever asked next, whatever endpoint they had asked for.
+ */
+const connections = new Map<string, ConnectedBrowser>();
+const connectingByUrl = new Map<string, Promise<ConnectedBrowser>>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -346,11 +355,13 @@ function toDirectWsEndpoint(cdpUrl: string): string | null {
 
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
-  if (cached?.cdpUrl === normalized) {
-    return cached;
+  const existing = connections.get(normalized);
+  if (existing) {
+    return existing;
   }
-  if (connecting) {
-    return await connecting;
+  const inFlight = connectingByUrl.get(normalized);
+  if (inFlight) {
+    return await inFlight;
   }
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
@@ -369,12 +380,12 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         const headers = getHeadersWithAuth(endpoint);
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
         const onDisconnected = () => {
-          if (cached?.browser === browser) {
-            cached = null;
+          if (connections.get(normalized)?.browser === browser) {
+            connections.delete(normalized);
           }
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
-        cached = connected;
+        connections.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
         return connected;
@@ -391,11 +402,12 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     throw new Error(message);
   };
 
-  connecting = connectWithRetry().finally(() => {
-    connecting = null;
+  const pending = connectWithRetry().finally(() => {
+    connectingByUrl.delete(normalized);
   });
+  connectingByUrl.set(normalized, pending);
 
-  return await connecting;
+  return await pending;
 }
 
 async function getAllPages(browser: Browser): Promise<Page[]> {
@@ -548,17 +560,28 @@ export function refLocator(page: Page, ref: string) {
   return page.locator(`aria-ref=${normalized}`);
 }
 
-export async function closePlaywrightBrowserConnection(): Promise<void> {
-  const cur = cached;
-  cached = null;
-  connecting = null;
-  if (!cur) {
-    return;
+/** Closes one endpoint's connection, or every one of them when no URL is given. */
+export async function closePlaywrightBrowserConnection(cdpUrl?: string): Promise<void> {
+  const targets: ConnectedBrowser[] = [];
+  if (cdpUrl) {
+    const normalized = normalizeCdpUrl(cdpUrl);
+    const cur = connections.get(normalized);
+    connections.delete(normalized);
+    connectingByUrl.delete(normalized);
+    if (cur) {
+      targets.push(cur);
+    }
+  } else {
+    targets.push(...connections.values());
+    connections.clear();
+    connectingByUrl.clear();
   }
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
-    cur.browser.off("disconnected", cur.onDisconnected);
+  for (const cur of targets) {
+    if (cur.onDisconnected && typeof cur.browser.off === "function") {
+      cur.browser.off("disconnected", cur.onDisconnected);
+    }
+    await cur.browser.close().catch(() => {});
   }
-  await cur.browser.close().catch(() => {});
 }
 
 function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
@@ -673,7 +696,7 @@ async function tryTerminateExecutionViaCdp(opts: {
  * instance, preventing reconnection.
  *
  * Instead we:
- * 1. Null out `cached` so the next call triggers a fresh connectOverCDP
+ * 1. Drop this endpoint's cached connection so the next call triggers a fresh connectOverCDP
  * 2. Fire-and-forget browser.close() — it may hang but won't block us
  * 3. The next connectBrowser() creates a completely new CDP WebSocket connection
  *
@@ -686,17 +709,17 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   reason?: string;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  if (cached?.cdpUrl !== normalized) {
+  const cur = connections.get(normalized);
+  if (!cur) {
     return;
   }
-  const cur = cached;
-  cached = null;
-  // Also clear `connecting` so the next call does a fresh connectOverCDP
-  // rather than awaiting a stale promise.
-  connecting = null;
+  connections.delete(normalized);
+  // Also drop any in-flight connect for this endpoint so the next call does a
+  // fresh connectOverCDP rather than awaiting a stale promise.
+  connectingByUrl.delete(normalized);
   if (cur) {
     // Remove the "disconnected" listener to prevent the old browser's teardown
-    // from racing with a fresh connection and nulling the new `cached`.
+    // from racing with a fresh connection and evicting the new connection.
     if (cur.onDisconnected && typeof cur.browser.off === "function") {
       cur.browser.off("disconnected", cur.onDisconnected);
     }

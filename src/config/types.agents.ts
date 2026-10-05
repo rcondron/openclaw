@@ -63,6 +63,14 @@ export type AgentConfig = {
     prune?: SandboxPruneSettings;
   };
   tools?: AgentToolsConfig;
+  /**
+   * Browser profile this agent uses when a tool call does not name one.
+   * Lets colleagues sharing one gateway hold separate logins: each profile has
+   * its own cdpUrl, and the browser at the other end gives every url its own
+   * cookie jar. Without it they share a profile, so signing one in signs the
+   * others out.
+   */
+  browserProfile?: string;
 };
 
 export type AgentsConfig = {
