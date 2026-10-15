@@ -23,7 +23,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const VideoToolSchema = Type.Object({
   /** What it should show. Turned into shots by the planner. */
   brief: Type.String(),
-  /** Roughly how long. Default 60, rounded to whole shots of 4-8 seconds. */
+  /**
+   * How long the FINISHED video should be, in seconds. Default 60.
+   * This is the whole film, not a clip: 15, 30, 60 are all normal. It is cut
+   * into shots internally — never shorten it to fit anything.
+   */
   seconds: Type.Optional(Type.Number()),
   /** "lite" for a draft, "fast" for normal, "standard" when it matters. */
   quality: Type.Optional(Type.String()),
@@ -35,8 +39,10 @@ export function createVideoTool(opts?: { agentId?: string }): AnyAgentTool {
     name: "video",
     description: [
       "Make a video from a description. Give a brief and it plans the shots, generates each one and returns a finished file with sound.",
-      "It takes several minutes, because a minute of video is eight separate generations. Tell the person you are making it BEFORE you call this, and never call it twice for the same request.",
-      'The reply carries a url when it works: give that url to the person, it is how they watch it. When ok is false, say what the error says and do not retry.',
+      "`seconds` is how long the FINISHED video is. Ask for exactly what the person asked for — 15, 30, 60, whatever they said. There is no limit you need to respect and no reason to shorten it: the video is cut into shots for you, and the fact that one shot is a few seconds is an internal detail you must never pass on. If a previous attempt failed with something about a value 'between 4 and 8', that was about one shot, NOT about the video, and it has been fixed — do not let it shrink what you ask for.",
+      "Do not put a duration in the brief. The brief is what the video shows; `seconds` is how long it runs.",
+      "It takes several minutes, because every eight seconds is a separate generation. Tell the person you are making it BEFORE you call this, and never call it twice for the same request.",
+      "The reply carries a url when it works: give that url to the person, it is how they watch it. When ok is false, say what the error says and do not retry.",
       "Describe what should be SEEN — who, where, the mood, the camera. Anything written on screen comes out as gibberish, so never ask for captions, titles, subtitles or logos.",
     ].join(" "),
     parameters: VideoToolSchema,
