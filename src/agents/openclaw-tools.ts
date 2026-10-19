@@ -5,6 +5,7 @@ import { resolveAgentBrowserProfile, resolveSessionAgentId } from "./agent-scope
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
+import { createFilesTool } from "./tools/files-tool.js";
 import { createVideoTool } from "./tools/video-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -104,6 +105,12 @@ export function createOpenClawTools(options?: {
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
   const tools: AnyAgentTool[] = [
+    createFilesTool({
+      agentId: resolveSessionAgentId({
+        sessionKey: options?.agentSessionKey,
+        config: options?.config,
+      }),
+    }),
     createVideoTool({
       agentId: resolveSessionAgentId({
         sessionKey: options?.agentSessionKey,
